@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+# data and results live in $V2D_DATA, never in the repository
+out/
+logs/
+weights/
+challenge/
+submission/
+seeds/
+*.parquet
+*.npz
+*.mp4

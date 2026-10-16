@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Stage 1 (prep) for one episode: trim -> undistort -> frames -> MoGe depth -> intrinsics.
+
+Writes into out/episode_XXXXXX/:
+  video_trim.mp4            source frames [first-margin, last+margin] (lossless-ish H.264, crf 12)
+  anycalib/                 AnyCalib intrinsics, distortion, undistorted.mp4
+  frames/000000.png ...     undistorted frames; local frame i == video frame i + frame_offset
+  depth/, intrinsics/       MoGe per-frame depth (uint16 inverse) and intrinsics
+  intrinsics_stable.json    temporal median of the per-frame intrinsics
+  track1_meta.json          frame_offset, n_frames, scored span, source video
+
+stdout gets one line per step (the progress log); everything the models print goes to
+--debug_log. Each step is skipped when its output is complete (exact frame counts).
+
+Run with the pipeline interpreter and V2D_BACKEND=venv:
+
+    python track1/stage1_prep.py --episode 28 --out_root out --weights weights \
+        --spans submission/scored_spans.json --debug_log logs/stages/01_prep/episode_000028.debug.log
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import subprocess
+import sys
+import time
+
+from v2d.anycalib.docker.run_video_to_calibration import (
+    run_video_to_calibration as run_anycalib_video_to_calibration,
+)
+from v2d.common.utils import extract_images
+from v2d.depth.lib.stabilize_intrinsics import stabilize_intrinsics
+from v2d.moge.docker.run_video_to_depth import run_video_to_depth as run_moge_depth
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import paths  # noqa: E402
+VIDEO_DIR = str(paths.VIDEO_DIR)
+
+
+def log(msg: str) -> None:
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+@contextlib.contextmanager
+def to_debug(path: str):
+    """Send everything written to fd 1/2 (this process and its subprocesses) to the debug log."""
+    sys.stdout.flush(); sys.stderr.flush()
+    saved = os.dup(1), os.dup(2)
+    with open(path, "a") as fh:
+        fh.write(f"\n===== {time.strftime('%H:%M:%S')} =====\n"); fh.flush()
+        os.dup2(fh.fileno(), 1); os.dup2(fh.fileno(), 2)
+        try:
+            yield
+        finally:
+            sys.stdout.flush(); sys.stderr.flush()
+            os.dup2(saved[0], 1); os.dup2(saved[1], 2)
+            os.close(saved[0]); os.close(saved[1])
+
+
+def n_files(d: str, ext: str) -> int:
+    return len([f for f in os.listdir(d) if f.endswith(ext)]) if os.path.isdir(d) else 0
+
+
+def count_frames(video: str) -> int:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                          "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", video],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    return int(out)
+
+
+def step(name: str, done: bool, fn, debug_log: str) -> float:
+    if done:
+        log(f"  [skip] {name} (already complete)")
+        return 0.0
+    log(f"  [run ] {name}")
+    t0 = time.time()
+    with to_debug(debug_log):
+        fn()
+    dt = time.time() - t0
+    log(f"  [done] {name} in {dt:.0f}s")
+    return dt
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--episode", type=int, required=True)
+    ap.add_argument("--out_root", required=True)
+    ap.add_argument("--weights", required=True)
+    ap.add_argument("--spans", required=True)
+    ap.add_argument("--debug_log", required=True)
+    ap.add_argument("--margin", type=int, default=10)
+    args = ap.parse_args()
+
+    ep = f"episode_{args.episode:06d}"
+    out = os.path.abspath(os.path.join(args.out_root, ep))
+    W = os.path.abspath(args.weights)
+    os.makedirs(out, exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(args.debug_log)), exist_ok=True)
+    video = os.path.join(VIDEO_DIR, f"{ep}.mp4")
+    span = json.load(open(args.spans))[str(args.episode)]
+
+    n_video = count_frames(video)
+    lo = max(0, span["first"] - args.margin)
+    hi = min(n_video - 1, span["last"] + args.margin)
+    n = hi - lo + 1
+    log(f"{ep}: video {n_video} frames, scored {span['first']}..{span['last']} "
+        f"({span['n_scored']} scored), keeping {lo}..{hi} ({n} frames)")
+    meta = {"episode": args.episode, "source_video": video, "n_video_frames": n_video,
+            "frame_offset": lo, "n_frames": n, "scored_first": span["first"],
+            "scored_last": span["last"], "n_scored": span["n_scored"], "margin": args.margin}
+    meta_path = os.path.join(out, "track1_meta.json")
+    if os.path.exists(meta_path):
+        old = json.load(open(meta_path))
+        if (old.get("frame_offset"), old.get("n_frames")) != (lo, n):
+            raise SystemExit(f"{out} was built with another frame window; delete it to rebuild")
+    json.dump(meta, open(meta_path, "w"), indent=1)
+
+    trimmed = os.path.join(out, "video_trim.mp4")
+    anycalib = os.path.join(out, "anycalib")
+    undist = os.path.join(anycalib, "undistorted.mp4")
+    undist_intr = os.path.join(anycalib, "undistorted_intrinsics.json")
+    frames, depth, intr = (os.path.join(out, d) for d in ("frames", "depth", "intrinsics"))
+    intr_stable = os.path.join(out, "intrinsics_stable.json")
+    timings = {}
+
+    def trim():
+        tmp = trimmed + ".tmp.mp4"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", video,
+                        "-vf", f"select='between(n\\,{lo}\\,{hi})'", "-vsync", "0",
+                        "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", tmp], check=True)
+        os.replace(tmp, trimmed)
+
+    def undistort():
+        os.makedirs(anycalib, exist_ok=True)
+        run_anycalib_video_to_calibration(
+            video_path=trimmed, intrinsics_path=os.path.join(anycalib, "intrinsics.json"),
+            distortion_path=os.path.join(anycalib, "distortion.json"), weights_path=f"{W}/anycalib",
+            undistorted_video_path=undist, undistorted_intrinsics_path=undist_intr, dev=False)
+
+    timings["trim"] = step("trim video", os.path.exists(trimmed) and count_frames(trimmed) == n, trim,
+                           args.debug_log)
+    if count_frames(trimmed) != n:
+        raise SystemExit(f"trim produced {count_frames(trimmed)} frames, expected {n}")
+    timings["undistort"] = step("AnyCalib undistortion", os.path.exists(undist), undistort, args.debug_log)
+    timings["frames"] = step("extract frames", n_files(frames, ".png") == n,
+                             lambda: extract_images(undist, frames), args.debug_log)
+    if n_files(frames, ".png") != n:
+        raise SystemExit(f"frames: {n_files(frames, '.png')} extracted, expected {n}")
+    timings["depth"] = step("MoGe depth + intrinsics", n_files(depth, ".png") == n,
+                            lambda: run_moge_depth(video_path=undist, depth_folder=depth,
+                                                   intrinsics_folder=intr, weights_path=f"{W}/moge",
+                                                   input_intrinsics_path=undist_intr, dev=False),
+                            args.debug_log)
+    if n_files(depth, ".png") != n:
+        raise SystemExit(f"depth: {n_files(depth, '.png')} maps, expected {n} (truncated MoGe run?)")
+    timings["intrinsics"] = step("stabilise intrinsics", os.path.exists(intr_stable),
+                                 lambda: stabilize_intrinsics(intr, intr_stable), args.debug_log)
+
+    meta["stage1_seconds"] = {k: round(v, 1) for k, v in timings.items()}
+    json.dump(meta, open(meta_path, "w"), indent=1)
+    log(f"{ep}: stage 1 OK — {n} frames, {n_files(depth, '.png')} depth maps, "
+        f"intrinsics {json.load(open(intr_stable))}")
+
+
+if __name__ == "__main__":
+    main()

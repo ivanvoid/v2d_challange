@@ -1,0 +1,117 @@
+{
+ "_comment": "Per object type: plausible largest extent in metres (gate for detections and meshes), a cleaned detector prompt tried first (metadata prompts have typos: 'stipped', 'pixalated', 'An metallic', 'white_laptop_cart.'), and extra prompts tried after the metadata prompt.",
+ "hula_hoop": {
+  "size_m": [
+   0.6,
+   1.2
+  ],
+  "aliases": [
+   "hula hoop.",
+   "plastic hoop.",
+   "ring."
+  ]
+ },
+ "big_red_bowl": {
+  "size_m": [
+   0.2,
+   0.5
+  ],
+  "aliases": [
+   "red bowl.",
+   "plastic bowl.",
+   "bowl."
+  ]
+ },
+ "iron": {
+  "size_m": [
+   0.18,
+   0.4
+  ],
+  "aliases": [
+   "clothes iron.",
+   "steam iron.",
+   "iron."
+  ],
+  "prompt": "a metallic clothes iron with blue accents."
+ },
+ "white_desk": {
+  "size_m": [
+   0.7,
+   1.7
+  ],
+  "aliases": [
+   "white desk.",
+   "desk.",
+   "table."
+  ],
+  "prompt": "a white desk."
+ },
+ "black_pan": {
+  "size_m": [
+   0.25,
+   0.6
+  ],
+  "aliases": [
+   "frying pan.",
+   "black pan.",
+   "pan."
+  ],
+  "prompt": "a black frying pan."
+ },
+ "foam_grass_block": {
+  "size_m": [
+   0.15,
+   0.5
+  ],
+  "aliases": [
+   "foam block.",
+   "green and brown block.",
+   "cube."
+  ],
+  "prompt": "a green and brown pixelated foam block."
+ },
+ "paint_roller": {
+  "size_m": [
+   0.2,
+   0.55
+  ],
+  "aliases": [
+   "paint roller.",
+   "roller."
+  ],
+  "prompt": "a white paint roller with a blue handle."
+ },
+ "pink_foam_roll": {
+  "size_m": [
+   0.25,
+   0.8
+  ],
+  "aliases": [
+   "pink foam roller.",
+   "pink cylinder.",
+   "foam roller."
+  ]
+ },
+ "short_wood_stool": {
+  "size_m": [
+   0.35,
+   0.75
+  ],
+  "aliases": [
+   "wooden stool.",
+   "stool."
+  ]
+ },
+ "white_laptop_cart": {
+  "size_m": [
+   0.5,
+   1.2
+  ],
+  "aliases": [
+   "rolling laptop cart.",
+   "laptop desk.",
+   "cart."
+  ],
+  "prompt": "a white rolling laptop cart."
+ }
+}

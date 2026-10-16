@@ -1,0 +1,4 @@
+{
+ "_comment": "Per-episode stage-6 settings chosen after review. Keys are episode indices; values override command-line defaults.",
+ "17": {"anchor_select": "vis", "handover_deg": 999.0, "_why": "v2 fixed anchors gave the best result on review (0 flips, IoU 0.86)"}
+}
