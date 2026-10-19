@@ -2,7 +2,8 @@
 """Extract the scored frame span of every Track 1 episode from the sample submission.
 
 Writes {"<episode>": {"first": int, "last": int, "n_scored": int, "frames": [int, ...]}} as JSON;
-"frames" are the exact scored video frames (the hand-object contact span; may have gaps).
+"frames" are the exact scored video frames: the valid frames inside the hand-object contact span
+(first..last); gaps between stretches are frames whose ground truth is invalid, not non-contact frames.
 Run with the submission venv (needs pandas + pyarrow):
 
     .venv-submit/bin/python track1/scored_spans.py \

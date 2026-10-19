@@ -45,8 +45,8 @@ KIT_T1 = paths.KIT / "tools" / "track1"
 STAGES = {
     "1": dict(code=["stage1_prep.py"], extra=[], deps=[],
               inputs=["META_WINDOW", "intrinsics_stable.json", "depth_scale.json", "floor.json"], outputs=[]),
-    "2": dict(code=["fit_mhr.py"], extra=[KIT_T1 / "mesh_to_mhr_params.py"], deps=[],
-              inputs=["META_WINDOW", "intrinsics_stable.json"], outputs=["body"]),
+    "2": dict(code=["stage2_track.py", "stage2_body.py", "fit_mhr.py", "stage2_depth.py"], extra=[KIT_T1 / "mesh_to_mhr_params.py"], deps=[],
+              inputs=["META_WINDOW", "intrinsics_stable.json", "FRAMES"], outputs=["body"]),
     "3": dict(code=["stage3_select.py"], extra=[T1 / "object_priors.json"], deps=["1", "2"],
               inputs=["SEED"],
               outputs=["select", "object_track.json", "dino_detections.json", "dino_candidates", "near_frames"]),
@@ -69,7 +69,7 @@ STAGES = {
               outputs=["poses_final", "track/scale_match.json", "SUB_EPISODE"]),
 }
 # outputs that must exist for a stamp to count (a stamp without its result is stale)
-REQUIRED = {"1": ["depth_scale.json", "floor.json", "background.npz"], "2": ["body/mhr_fit.npz"], "3": ["object_track.json"],
+REQUIRED = {"1": ["depth_scale.json", "floor.json", "background.npz"], "2": ["body/mhr_fit.npz", "body/person_track.json", "body/depth_trend.json"], "3": ["object_track.json"],
             "4": ["masks_seed.json"], "5": ["mesh/refine.json"], "5e": ["mesh/object_choice.json"],
             "6": ["track/states.json"], "7": ["track/smooth.json"], "8": ["track/scale_match.json"]}
 
@@ -132,6 +132,10 @@ def inputs_of(e: int, stage: str) -> dict:
                 continue
             m = json.load(open(W / "track1_meta.json"))
             out[name] = {k: m.get(k) for k in ("frame_offset", "n_frames", "scored_first", "scored_last", "margin")}
+        elif name == "FRAMES":                     # the extracted frames: names, sizes, modification times
+            fd = W / "frames"
+            out[name] = sha1_bytes("".join(f"{p.name}:{p.stat().st_size}:{p.stat().st_mtime_ns};"
+                                           for p in sorted(fd.glob("*.png"))).encode()) if fd.is_dir() else None
         elif name == "SEED":
             out[name] = sha1_file(paths.SEEDS / f"episode_{e:06d}.json")
         elif name == "OVERRIDES":
@@ -145,7 +149,10 @@ def inputs_of(e: int, stage: str) -> dict:
 
 
 def params_of(stage: str) -> dict:
-    return {"SMOOTH_SIGMA": os.environ.get("SMOOTH_SIGMA", "2.0")} if stage == "2" else {}
+    if stage == "2":
+        return {"SMOOTH_SIGMA": os.environ.get("SMOOTH_SIGMA", "2.0"), "BODY_MODE": os.environ.get("BODY_MODE", "body"),
+                "BODY_NO_MASK": os.environ.get("BODY_NO_MASK", "")}
+    return {}
 
 
 def dep_ids(e: int, stage: str) -> tuple[dict, list[str]]:

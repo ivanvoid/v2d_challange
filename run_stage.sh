@@ -6,6 +6,8 @@
 #   EPISODES="0-29" ./run_stage.sh 1      # stage 1 on everything
 #   EPISODES="0-29" ./run_stage.sh 5e     # one mesh per object, for the objects of these episodes
 #   FORCE=1 ...                           # run even if the stage is up to date
+#   NO_REVIEW=1 ...                       # skip building the review (run_stage_pool.sh does it per episode)
+#   REVIEW_ONLY=1 ...                     # only build the review of these episodes (no lock, no index merge)
 #
 # Output: logs/stages/<NN_name>/
 #   batch.log                       everything this script printed
@@ -113,18 +115,21 @@ stage2_body() {  # $1 = episode index
     LAST=$(python3 -c "import json;print(json.load(open('$W/track1_meta.json'))['scored_last'])")
     echo "[$(date +%T)] $EP: frames $(ls "$W/frames" | wc -l), offset $OFF, scored $FIRST..$LAST" | tee -a "$PLOG"
     mkdir -p "$B"; STEP_SECONDS=""
-    step "$PLOG" "$DLOG" "person track (detectron2)" "[[ -f '$B/bbox_track.pt' ]]" -- \
-        "$PY_PIPE" -m v2d.detectron2.docker.run_track_bboxes --rgb_path "$W/frames" \
-        --weights_dir "$WEIGHTS/detectron2" --output_path "$B/bbox_track.pt" --batch_size 8 || return 1
-    step "$PLOG" "$DLOG" "SAM3D-Body (real intrinsics)" "[[ -f '$B/mhr_mesh.pt' ]]" -- \
-        "$PY_PIPE" -m v2d.sam3d_body.docker.run_estimate_mhr_params --rgb_path "$W/frames" \
-        --cam_intrinsics_path "$W/intrinsics_stable.json" --weights_dir "$WEIGHTS/sam3d_body" \
-        --bbox_path "$B/bbox_track.pt" --output_params_path "$B/mhr_params.pt" \
-        --output_mesh_path "$B/mhr_mesh.pt" --batch_size 8 || return 1
-    step "$PLOG" "$DLOG" "MHR fit (one identity, sigma $SMOOTH_SIGMA)" "[[ -f '$B/mhr_fit.npz' ]]" -- \
+    step "$PLOG" "$DLOG" "actor track + person masks (one detector pass)" "[[ -f '$B/person_track.json' && -f '$B/bbox_track.pt' ]]" -- \
+        /opt/venvs/detectron2/bin/python "$T1/stage2_track.py" --episode "$N" --out_root "$OUT" \
+        --weights "$WEIGHTS" --batch 2 || { grep "ACCEPTANCE\|actor track" "$DLOG" | tail -2 | tee -a "$PLOG"; return 1; }
+    grep "actor track —" "$DLOG" | tail -1 | sed 's/^/    /' | tee -a "$PLOG"
+    step "$PLOG" "$DLOG" "SAM3D-Body (box + person mask)" "[[ -f '$B/mhr_mesh.pt' ]]" -- \
+        "$PY_REVIEW" "$T1/stage2_body.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
+        --mode "${BODY_MODE:-body}" ${BODY_NO_MASK:+--no_mask} || return 1
+    grep "SAM3D-Body (" "$DLOG" | tail -1 | sed 's/^.*\] /    /' | tee -a "$PLOG"
+    step "$PLOG" "$DLOG" "MHR fit (one identity, sigma $SMOOTH_SIGMA)" "[[ -f '$B/mhr_fit_raw.npz' || -f '$B/mhr_fit.npz' ]]" -- \
         "$PY_REVIEW" "$T1/fit_mhr.py" --mesh "$B/mhr_mesh.pt" --model "$MHR_MODEL" \
         --first "$FIRST" --last "$LAST" --frame_offset "$OFF" --smooth_sigma "$SMOOTH_SIGMA" \
         --out "$B/mhr_fit.npz" || return 1
+    step "$PLOG" "$DLOG" "body depth follows the MoGe trend" "[[ -f '$B/depth_trend.json' ]]" -- \
+        "$PY_REVIEW" "$T1/stage2_depth.py" --episode "$N" --out_root "$OUT" --model "$MHR_MODEL" || return 1
+    grep "body depth follows" "$DLOG" | tail -1 | sed 's/^.*\] /    /' | tee -a "$PLOG"
     python3 - "$W/track1_meta.json" "{${STEP_SECONDS%, }}" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1])); new = json.loads(sys.argv[2])
@@ -175,6 +180,19 @@ build_review() {  # $1 = episodes to include; rebuilds review/ sheets and index.
     flock -u 9
 }
 
+if [[ -n "${REVIEW_ONLY:-}" ]]; then         # this episode's review only; the full index is rebuilt later
+    case "$STAGE" in
+        1) "$PY_REVIEW" "$T1/review_stage1.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        2) "$PY_REVIEW" "$T1/review_stage2.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" --model "$MHR_MODEL" ;;
+        3) "$PY_REVIEW" "$T1/review_stage3.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        4) "$PY_REVIEW" "$T1/review_stage4.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        5) "$PY_REVIEW" "$T1/review_stage5.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        6) "$PY_REVIEW" "$T1/review_stage6.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        7) "$PY_REVIEW" "$T1/review_stage7.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        8) "$PY_REVIEW" "$T1/review_stage8.py" --episodes $EP_LIST --out_root "$OUT" --sub_dir "$BASEPATH/submission" --stage_dir "$SDIR" ;;
+    esac 2>&1 | grep -v pynvml
+    exit 0
+fi
 echo "===== stage $NAME  $(date -Is)  episodes: $EP_LIST ====="
 [[ -f "$SPANS" ]] || "$PY_SUB" "$T1/scored_spans.py" \
     --sample "$BASEPATH/v2d_submission_kit/data/track_1_sample_submission.parquet" --out "$SPANS" || exit 1
@@ -280,12 +298,11 @@ for N in $EP_LIST; do
         echo "[$(date +%T)] $EP finished in $((SECONDS - t))s"
     fi
     DONE_LIST+="$N "
-    build_review "$DONE_LIST" > /dev/null 2>&1   # index.html is refreshed after every episode
+    [[ -n "${NO_REVIEW:-}" ]] || build_review "$DONE_LIST" > /dev/null 2>&1   # index.html refreshed per episode
 done
 
-echo "[$(date +%T)] building review"
-build_review "$EP_LIST"
-if [[ "$STAGE" == "8" ]]; then
+if [[ -z "${NO_REVIEW:-}" ]]; then echo "[$(date +%T)] building review"; build_review "$EP_LIST"; fi
+if [[ "$STAGE" == "8" && -z "${NO_REVIEW:-}" ]]; then
     echo "[$(date +%T)] packing a validation parquet for these episodes (placeholder commit; not uploadable)"
     "$PY_SUB" "$T1/pack_submission.py" --partial 2>&1 | tail -4
 fi

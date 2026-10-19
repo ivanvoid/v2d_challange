@@ -25,7 +25,8 @@ the object translation per scored stretch (jitter, not the error).
 
 **1 · p1_global** — question: should the object live in the body's depth scale ("global") or in
 MoGe's ("none")? The baseline chose by the smallest hand–object gap over the whole first..last
-range, which includes non-contact frames. Projective consistency and CARI4D (which anchors
+range (the contact span; gaps between scored stretches are frames with invalid ground truth, not
+non-contact frames — see v2dlb/mhr_submission.py:34). Projective consistency and CARI4D (which anchors
 monocular depth to the human body, `models/CARI4D/prep/align_monod2hum.py`) both argue for the body
 scale. Read CD-O first. If CD-O improves, follow-ups: "global" everywhere vs per-frame (CARI4D
 aligns per frame with a robust scale + shift); choose the variant on scored (contact) frames only.

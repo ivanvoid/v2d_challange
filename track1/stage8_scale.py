@@ -8,8 +8,9 @@ camera-frame position AND size by k keeps its image projection identical and onl
 the camera ray. Experiment p1 (docs/EXPERIMENTS.md) showed that hand contact on scored frames is
 the right guide (moving 8 episodes to the body's scale made CD-O worse by 5.9 cm).
 
-Scored frames are the hand-object CONTACT frames (submission/scored_spans.json "frames"), so the
-placement is chosen on them only:
+Scored frames are the VALID frames inside the hand-object contact span (submission/scored_spans.json
+"frames"; gaps between scored stretches are frames whose ground truth is invalid, the hand still
+touches the object there), so the placement is chosen on the scored frames — the ones that count:
   k        grid 0.80 .. 1.25 (step 0.025); k = 1 is MoGe's scale, k = 1/median(ratio) the body's
   mode     fixed     s_f = k
            follow    s_f = k * median(ratio) / ratio_f   (object follows the body's depth trend;

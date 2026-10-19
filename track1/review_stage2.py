@@ -48,7 +48,7 @@ sys.path.insert(0, str(KIT_TRACK1))
 from mesh_to_mhr_params import MHR  # noqa: E402
 
 R_WRIST_2D, L_WRIST_2D = 41, 62  # mhr70 keypoints
-REVIEW_VERSION = 2          # bump when checks change: older checks.json files are recomputed
+REVIEW_VERSION = 6          # bump when checks change: older checks.json files are recomputed
 
 
 def load_depth(path: str) -> np.ndarray:
@@ -97,9 +97,215 @@ def runs_of(frames: np.ndarray) -> list[np.ndarray]:
     return np.split(np.arange(len(frames)), cut)
 
 
+def concerns_sheet(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, fit_v: np.ndarray,
+                   faces: np.ndarray, vf: np.ndarray) -> tuple[list, str | None, dict]:
+    """Visual checks of the concerns in review/stage2.md (third sheet, review/<ep>_concerns.png).
+
+    (a) actor track: per-frame label (detected / redetected / interpolated / held, body/person_track.json)
+        + thumbnails of the library track's largest gaps (library box red, repaired box green, mask)
+    (b) image agreement: IoU of the fitted body silhouette with the actor's person mask, worst frames
+    (c) body - MoGe depth on ALL body pixels vs on pixels where the person mask says the body is visible
+    (d) feet: lowest body point above the stage-1 floor plane (body put in MoGe scale by the per-frame
+        MoGe/body ratio) and its horizontal speed while within 3 cm of the floor
+    """
+    ep = f"episode_{meta['episode']:06d}"
+    off = meta["frame_offset"]
+    B = os.path.join(ep_dir, "body")
+    pt_path = os.path.join(B, "person_track.json")
+    if not os.path.exists(pt_path):
+        return [{"check": "actor track", "status": "WARN", "detail": "no person_track.json (old stage 2 output)"}], None, {}
+    pt = json.load(open(pt_path))
+    lab = np.array([r["label"] for r in pt["per_frame"]])
+    spans = json.load(open(paths.DATA / "submission" / "scored_spans.json"))[str(meta["episode"])]
+    scored = np.asarray(spans["frames"])
+    runs = runs_of(scored)
+    k_sc = scored - vf[0]
+    colors = {"detected": (0.2, 0.7, 0.2), "redetected": (0.1, 0.6, 0.9), "interpolated": (1.0, 0.6, 0.0),
+              "held": (0.9, 0.1, 0.1)}
+    fl_path = os.path.join(ep_dir, "floor.json")
+    floor = json.load(open(fl_path)) if os.path.exists(fl_path) else None
+
+    def mask_of(l):
+        p = os.path.join(B, "person_masks", f"{l:06d}.png")
+        return cv2.imread(p, cv2.IMREAD_GRAYSCALE) > 0 if os.path.exists(p) else None
+
+    rows = []                                     # every 2nd scored frame
+    for k in k_sc[::2]:
+        l = vf[k] - off
+        uv = project(fit_v[k], K)
+        sil = silhouette(uv, faces, hw)
+        m = mask_of(l)
+        d = load_depth(os.path.join(ep_dir, "depth", f"{l:06d}.png"))
+        allb = depth_bias(fit_v[k], uv, d)
+        vis = None
+        if m is not None:
+            dm = d.copy(); dm[~m] = np.nan
+            px = np.round(uv).astype(int)
+            ok = (px[:, 0] >= 0) & (px[:, 0] < hw[1]) & (px[:, 1] >= 0) & (px[:, 1] < hw[0])
+            on = np.zeros(len(uv), bool); on[ok] = m[px[ok, 1], px[ok, 0]]
+            vis = depth_bias(fit_v[k][on], uv[on], dm) if on.sum() > 50 else None
+        iou_ = float((sil & m).sum() / max((sil | m).sum(), 1)) if m is not None else np.nan
+        cover = float((sil & m).sum() / max(m.sum(), 1)) if m is not None else np.nan      # visible person covered
+        prec = float((sil & m).sum() / max(sil.sum(), 1)) if m is not None else np.nan     # body on visible person
+        rows.append({"video_frame": int(vf[k]), "iou": iou_, "cover": cover, "precision": prec,
+                     "dz_all_cm": allb[0] if allb else np.nan,
+                     "dz_visible_cm": vis[0] if vis and np.isfinite(vis[0]) else np.nan,
+                     "ratio": allb[1] if allb else np.nan})
+    iou_arr = np.array([r["iou"] for r in rows], float)
+    cov_arr = np.array([r["cover"] for r in rows], float)
+    pre_arr = np.array([r["precision"] for r in rows], float)
+    stats = {"track_counts_scored": pt["counts_scored"], "track_accepted": pt["accepted"],
+             "ambiguous": len(pt["ambiguous_frames"]), "gaps": len(pt["gaps"]),
+             "mask_iou_median": float(np.nanmedian(iou_arr)) if np.isfinite(iou_arr).any() else float("nan"),
+             "mask_iou_p10": float(np.nanpercentile(iou_arr, 10)) if np.isfinite(iou_arr).any() else float("nan"),
+             "mask_cover_median": float(np.nanmedian(cov_arr)) if np.isfinite(cov_arr).any() else float("nan"),
+             "mask_cover_p10": float(np.nanpercentile(cov_arr, 10)) if np.isfinite(cov_arr).any() else float("nan"),
+             "body_on_mask_median": float(np.nanmedian(pre_arr)) if np.isfinite(pre_arr).any() else float("nan"),
+             "dz_all_cm_median": float(np.nanmedian([r["dz_all_cm"] for r in rows])),
+             "dz_visible_cm_median": float(np.nanmedian([r["dz_visible_cm"] for r in rows]))}
+
+    # feet vs floor
+    foot = None
+    if floor is not None:
+        n_ = np.asarray(floor["normal"]); d_ = floor["d"]
+        rf = np.array([r["video_frame"] for r in rows]); rr = np.array([r["ratio"] for r in rows], float)
+        good = np.isfinite(rr)
+        ratio_k = np.interp(vf[k_sc], rf[good], rr[good]) if good.sum() > 2 else np.ones(len(k_sc))
+        heights, lowest = [], []
+        for i, k in enumerate(k_sc):
+            P = fit_v[k] * ratio_k[i]
+            h = d_ - P @ n_
+            j = int(np.argmin(h))
+            heights.append(h[j] * 100); lowest.append(P[j])
+        heights, lowest = np.array(heights), np.array(lowest)
+        tang = lowest - (lowest @ n_)[:, None] * n_[None]
+        speed = np.full(len(k_sc), np.nan)
+        for r in runs:
+            if len(r) > 1:
+                speed[r[1:]] = np.linalg.norm(np.diff(tang[r], axis=0), axis=1) * 100
+        base = float(np.percentile(heights, 10))                     # body-floor offset of this episode
+        contact = heights < base + 3
+        foot = {"height_cm": heights, "speed_cm": speed, "base": base}
+        stats.update({"lowest_point_height_cm_median": float(np.median(heights)), "floor_offset_cm": base,
+                      "below_floor_5cm_frac": float((heights < -5).mean()),
+                      "above_floor_10cm_frac": float((heights > 10).mean()),
+                      "slide_cm_per_frame_in_contact_median": float(np.nanmedian(speed[contact])) if contact.any() else float("nan")})
+
+    checks = []
+    def add(name, ok_, detail, level="WARN"):
+        checks.append({"check": name, "status": "PASS" if ok_ else level, "detail": detail})
+    cs = pt["counts_scored"]; nsc = max(sum(cs.values()), 1)
+    add("actor track", pt["accepted"] and (cs["redetected"] + cs["interpolated"]) / nsc <= 0.05,
+        f"scored frames: {cs['detected']} detected, {cs['redetected']} re-detected, {cs['interpolated']} interpolated, "
+        f"{cs['held']} held; {len(pt['gaps'])} gaps in the actor track; {stats['ambiguous']} ambiguous frames",
+        "WARN" if pt["accepted"] else "FAIL")
+    add("body vs person mask", stats["mask_cover_median"] >= 0.65 and stats["mask_cover_p10"] >= stats["mask_cover_median"] - 0.15,
+        f"visible person covered by the body: median {100 * stats['mask_cover_median']:.0f}%, 10th percentile "
+        f"{100 * stats['mask_cover_p10']:.0f}%; body pixels on the visible person {100 * stats['body_on_mask_median']:.0f}% "
+        f"(lower when objects hide body parts); IoU {stats['mask_iou_median']:.2f}. Typical ~70-80 % (loose clothes, hair, "
+        f"mask edges); WARN below 65 % or when the 10th percentile is > 15 points below the median (frames that drop)")
+    add("depth on visible pixels", True,
+        f"body - MoGe median {stats['dz_all_cm_median']:+.1f} cm on all body pixels, {stats['dz_visible_cm_median']:+.1f} cm "
+        f"where the person mask says the body is visible")
+    if foot is not None:
+        add("feet vs floor", stats["below_floor_5cm_frac"] <= 0.1,
+            f"lowest body point {stats['lowest_point_height_cm_median']:+.1f} cm above the floor (median; offset "
+            f"{stats['floor_offset_cm']:+.1f} cm = 10th percentile); "
+            f"{100 * stats['below_floor_5cm_frac']:.0f}% of frames > 5 cm below, {100 * stats['above_floor_10cm_frac']:.0f}% "
+            f"> 10 cm above; sliding {stats['slide_cm_per_frame_in_contact_median']:.2f} cm/frame while within 3 cm of "
+            f"the offset")
+
+    # ------------------------------------------------------------------ sheet
+    gaps = sorted(pt["gaps"], key=lambda g: -g["frames"])[:3]
+    worst = [r for r in sorted(rows, key=lambda r: (np.nan_to_num(r["cover"], nan=9))) if np.isfinite(r["cover"])][:4]
+    n_rows = 4 + (1 if gaps else 0)
+    fig = plt.figure(figsize=(24, 5.5 * n_rows))
+    gs = fig.add_gridspec(n_rows, 4)
+    ax = fig.add_subplot(gs[0, :])
+    vfr = np.array([r["video_frame"] for r in pt["per_frame"]])
+    for name, c in colors.items():
+        sel = lab == name
+        ax.vlines(vfr[sel], 0, 1, colors=[c], lw=1.2, label=f"{name} ({int(sel.sum())})")
+    for r in runs:
+        ax.axvspan(scored[r[0]], scored[r[-1]], ymin=0.92, ymax=1.0, color="k")
+    amb = pt["ambiguous_frames"]
+    if amb:
+        ax.plot(amb, np.full(len(amb), 0.5), "kx", ms=6, label=f"ambiguous ({len(amb)})")
+    ax.set_yticks([]); ax.set_ylim(0, 1); ax.legend(loc="lower right", ncol=5, fontsize=10); ax.set_xlabel("video frame")
+    ax.set_title("actor track per frame (black band at the top = scored stretches)", fontsize=13)
+    row = 1
+    if gaps:
+        tiles = []
+        for g in gaps:
+            for f in sorted({g["video_first"], (g["video_first"] + g["video_last"]) // 2, g["video_last"]}):
+                tiles.append((g, f))
+        for j, (g, f) in enumerate(tiles[:4]):
+            l = f - off
+            img = cv2.cvtColor(cv2.imread(os.path.join(ep_dir, "frames", f"{l:06d}.png")), cv2.COLOR_BGR2RGB)
+            m = mask_of(l)
+            if m is not None:
+                cnt, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(img, cnt, -1, (0, 255, 0), 3)
+            x0, y0, x1, y1 = np.asarray(pt["per_frame"][l]["box"]).astype(int); cv2.rectangle(img, (x0, y0), (x1, y1), (0, 200, 0), 3)
+            ax = fig.add_subplot(gs[row, j]); ax.imshow(img); ax.axis("off")
+            ax.set_title(f"gap {g['video_first']}-{g['video_last']} ({g['frames']} fr, {g['scored_frames']} scored): frame {f}, "
+                         f"{pt['per_frame'][l]['label']}\ngreen = actor box + person mask", fontsize=10)
+        row += 1
+    for j, r in enumerate(worst):
+        l = r["video_frame"] - off; k = r["video_frame"] - vf[0]
+        img = cv2.cvtColor(cv2.imread(os.path.join(ep_dir, "frames", f"{l:06d}.png")), cv2.COLOR_BGR2RGB)
+        m = mask_of(l); sil = silhouette(project(fit_v[k], K), faces, hw)
+        over = img.copy()
+        over[m & ~sil] = (0.4 * over[m & ~sil] + 0.6 * np.array([40, 220, 40])).astype(np.uint8)
+        over[sil & ~m] = (0.4 * over[sil & ~m] + 0.6 * np.array([60, 120, 255])).astype(np.uint8)
+        over[sil & m] = (0.5 * over[sil & m] + 0.5 * np.array([230, 230, 230])).astype(np.uint8)
+        ys, xs = np.nonzero(m | sil)
+        y0, y1, x0, x1 = max(0, ys.min() - 40), min(hw[0], ys.max() + 40), max(0, xs.min() - 40), min(hw[1], xs.max() + 40)
+        ax = fig.add_subplot(gs[row, j]); ax.imshow(over[y0:y1, x0:x1]); ax.axis("off")
+        ax.set_title(f"frame {r['video_frame']}: person covered {100 * r['cover']:.0f}% (IoU {r['iou']:.2f})\n"
+                     f"green = person not covered, blue = body not on person, white = both", fontsize=10)
+    row += 1
+    ax = fig.add_subplot(gs[row, :2])
+    fr_ = [r["video_frame"] for r in rows]
+    ax.plot(fr_, cov_arr, color="tab:green", lw=1.6, label="visible person covered by the body")
+    ax.plot(fr_, pre_arr, color="tab:blue", lw=1.0, label="body pixels on the visible person (occlusion lowers it)")
+    ax.plot(fr_, iou_arr, color="tab:purple", lw=0.8, label="IoU")
+    ax.set_ylim(0, 1); ax.set_xlabel("video frame"); ax.grid(alpha=0.3); ax.legend(fontsize=9, loc="lower left")
+    ax.set_title(f"fitted body vs person mask: covered median {100 * stats['mask_cover_median']:.0f}%, "
+                 f"p10 {100 * stats['mask_cover_p10']:.0f}%")
+    ax = fig.add_subplot(gs[row, 2:])
+    ax.plot(fr_, [r["dz_all_cm"] for r in rows], color="tab:gray", lw=1, label="all body pixels")
+    ax.plot(fr_, [r["dz_visible_cm"] for r in rows], color="tab:blue", lw=1.6, label="visible (person mask) only")
+    ax.axhline(0, color="k", lw=0.6); ax.legend(fontsize=9); ax.set_xlabel("video frame")
+    ax.set_title("body − MoGe depth (cm)")
+    row += 1
+    if foot is not None:
+        ax = fig.add_subplot(gs[row, :2])
+        ax.plot(scored, foot["height_cm"], color="tab:brown", lw=1.2)
+        ax.axhline(0, color="k", lw=0.8); ax.axhline(foot["base"], color="tab:green", lw=1, ls="--")
+        ax.axhspan(foot["base"] - 3, foot["base"] + 3, color="tab:green", alpha=0.08)
+        ax.set_xlabel("video frame"); ax.grid(alpha=0.3)
+        ax.set_title(f"lowest body point above the floor (cm): median {stats['lowest_point_height_cm_median']:+.1f}; "
+                     f"dashed = offset (10th pct), band = touching")
+        ax = fig.add_subplot(gs[row, 2:])
+        ax.plot(scored, foot["speed_cm"], color="tab:gray", lw=0.8, label="all")
+        tc = foot["height_cm"] < foot["base"] + 3
+        ax.plot(scored[tc], foot["speed_cm"][tc], ".", color="tab:red", ms=3,
+                label="while touching the floor")
+        ax.set_yscale("log"); ax.legend(fontsize=9); ax.set_xlabel("video frame")
+        ax.set_title("horizontal speed of the lowest point (cm/frame) — ~0 while standing still; spikes when the "
+                     "lowest point switches feet (walking, stepping)")
+    fig.suptitle(f"{ep} — stage 2 concerns: actor track, image agreement, visible-pixel depth, feet", fontsize=16)
+    fig.tight_layout()
+    sheet = os.path.join(review_dir, f"{ep}_concerns.png")
+    fig.savefig(sheet, dpi=45)
+    plt.close(fig)
+    return checks, os.path.basename(sheet), stats
+
+
 def time_checks(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, boxes: np.ndarray,
                 scores: np.ndarray, raw_v: np.ndarray, faces: np.ndarray, fit_v: np.ndarray,
-                fit_j: np.ndarray, err: np.ndarray, err_lo: int, vf: np.ndarray) -> tuple[list, str, dict]:
+                fit_j: np.ndarray, err: np.ndarray, err_lo: int, vf: np.ndarray, mhr=None) -> tuple[list, str, dict]:
     """Scored-frame checks of the body over time (second sheet, review/<ep>_body_time.png).
 
     fit_v / fit_j cover video frames vf = first..last; scored frames come from scored_spans.json
@@ -122,6 +328,15 @@ def time_checks(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, box
     loc = vf - off
     raw_c = raw_v[loc].mean(1)                                    # [T, 3]
     fit_c = fit_j[:, JOINTS22].mean(1)
+    raw_c_fit, trend = None, None                  # the fit before stage2_depth.py moved it along the ray
+    raw_fit_path = os.path.join(ep_dir, "body", "mhr_fit_raw.npz")
+    if mhr is not None and os.path.exists(raw_fit_path):
+        rf = np.load(raw_fit_path)
+        zz = torch.as_tensor(np.concatenate([rf["scales"], rf["shape"]])[None], dtype=torch.float64, device=mhr.device)
+        raw_c_fit = mhr.run(torch.as_tensor(rf["pose"][vf], dtype=torch.float64, device=mhr.device), zz)[1].cpu().numpy()[:, JOINTS22].mean(1)
+    tp = os.path.join(ep_dir, "body", "depth_trend.json")
+    if os.path.exists(tp):
+        trend = json.load(open(tp))
     bh = (boxes[loc, 3] - boxes[loc, 1]).astype(float)
     rel2 = np.full(len(vf), np.nan)
     rel2[1:-1] = np.abs(bh[:-2] - 2 * bh[1:-1] + bh[2:]) / bh[1:-1] * 100
@@ -198,6 +413,11 @@ def time_checks(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, box
         f"slow MoGe/body ratio range (5-95%) {drift_pct:.1f}% = {drift_cm:.0f} cm at the body; body depth range "
         f"{stats['body_z_range_cm']:.0f} cm vs MoGe {stats['moge_z_range_cm']:.0f} cm over scored frames; ratio "
         f"changes {ratio_per_m:+.1f}%/m with depth (corr {ratio_depth_corr:.2f})")
+    if trend is not None:
+        add("body depth follows MoGe", True,
+            f"depth factor {trend['factor_scored'][0]:.3f}..{trend['factor_scored'][1]:.3f} on scored frames; body moved "
+            f"median {trend['shift_cm_scored']['median']:.1f} / max {trend['shift_cm_scored']['max']:.1f} cm along the "
+            f"camera ray; depth range {trend['depth_range_cm_before']:.0f} -> {trend['depth_range_cm_after']:.0f} cm")
     add("scored-joint jitter", stats["acc22_mean"] <= 0.2,
         f"22 scored joints, per stretch: mean {stats['acc22_mean']:.3f}, p95 {stats['acc22_p95']:.3f} cm/frame²")
     add("person box jitter", stats["box_height_jitter_pct_median"] <= 1.0,
@@ -231,6 +451,9 @@ def time_checks(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, box
             ax.axvspan(scored[r[0]], scored[r[-1]], color="tab:green", alpha=0.07)
     ax = fig.add_subplot(gs[1, :2])
     ax.plot(vf, raw_c[:, 2], color="tab:gray", lw=0.8, label="raw SAM3D-Body (per frame)")
+    raw_fit = os.path.join(ep_dir, "body", "mhr_fit_raw.npz")
+    if os.path.exists(raw_fit) and raw_c_fit is not None:
+        ax.plot(vf, raw_c_fit[:, 2], color="tab:blue", lw=1, ls="--", label="fitted before following MoGe")
     ax.plot(vf, fit_c[:, 2], color="tab:blue", lw=2, label="fitted (submitted)")
     ax.plot(rows[:, 0], moge_body_z, ".", color="tab:red", ms=4, label="MoGe on body pixels, in body scale")
     ax.axvline(f0, color="k", ls="--", lw=1); shade(ax); ax.legend(fontsize=9); ax.set_xlabel("video frame")
@@ -244,7 +467,8 @@ def time_checks(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, box
     xs = np.concatenate([scored[r][1:-1] for r in runs if len(r) >= 3] or [np.zeros(0)])
     ax.plot(xs, acc22, ".", color="tab:purple", ms=3)
     shade(ax); ax.set_xlabel("video frame")
-    ax.set_title(f"22 scored joints |2nd diff| per scored frame (cm/frame²): mean {stats['acc22_mean']:.3f}")
+    ax.set_title(f"22 scored joints |2nd diff| per scored frame (cm/frame²): mean {stats['acc22_mean']:.3f} — "
+                 f"green = scored stretches; gaps between them are not scored (invalid ground truth)")
     fig.suptitle(f"{ep} — stage 2 body over time (scored frames: {len(scored)} in {len(runs)} stretches)", fontsize=16)
     fig.tight_layout()
     sheet = os.path.join(review_dir, f"{ep}_body_time.png")
@@ -324,12 +548,19 @@ def review_episode(ep_dir: str, review_dir: str, mhr: MHR) -> dict:
     os.makedirs(review_dir, exist_ok=True)
     try:
         tc, time_sheet, time_stats = time_checks(ep_dir, meta, review_dir, K, hw, boxes, scores, raw_v, faces,
-                                                 fit_v, fit_j, err, int(fit["fit_video_lo"]), vf)
+                                                 fit_v, fit_j, err, int(fit["fit_video_lo"]), vf, mhr)
         checks += tc
     except Exception as exc:                                    # a broken check must not hide the rest
         import traceback; traceback.print_exc()
         checks.append({"check": "time checks", "status": "WARN", "detail": f"could not run: {exc!r}"})
         time_sheet, time_stats = None, None
+    try:
+        cc, conc_sheet, conc_stats = concerns_sheet(ep_dir, meta, review_dir, K, hw, fit_v, faces, vf)
+        checks += cc
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        checks.append({"check": "concerns sheet", "status": "WARN", "detail": f"could not run: {exc!r}"})
+        conc_sheet, conc_stats = None, None
 
     # ------------------------------------------------------------------ sheet
     sample = [int(round(i)) for i in np.linspace(0, len(vf) - 1, 6)]
@@ -364,10 +595,14 @@ def review_episode(ep_dir: str, review_dir: str, mhr: MHR) -> dict:
         ax.set_title(f"video frame {l + off}{tag}", fontsize=12)
 
     ax = fig.add_subplot(gs[3, 0:2])
+    sp = json.load(open(paths.DATA / "submission" / "scored_spans.json"))[str(meta["episode"])]
+    for r in runs_of(np.asarray(sp["frames"])):
+        ax.axvspan(sp["frames"][r[0]], sp["frames"][r[-1]], color="tab:green", alpha=0.08)
     if len(depth_rows):
-        ax.plot(depth_rows[:, 0], depth_rows[:, 2], color="tab:blue", lw=1.8)
+        ax.plot(depth_rows[:, 0], (depth_rows[:, 3] / ratio_med - 1) * 100, color="tab:blue", lw=1.8)
         ax.axhline(0, color="k", lw=0.8)
-    ax.set_title(f"body − MoGe depth on body pixels (cm): median {dz_med:+.1f}")
+    ax.set_title(f"MoGe/body depth ratio vs its median (%), median ratio {ratio_med:.3f}\n"
+                 f"flat = consistent; green = scored stretches")
     ax.set_xlabel("video frame")
     ax = fig.add_subplot(gs[3, 2:4])
     ax.plot(vf, a_raw, color="gray", lw=0.8, label=f"raw SAM3D-Body (mean {np.nanmean(a_raw):.2f})")
@@ -393,7 +628,8 @@ def review_episode(ep_dir: str, review_dir: str, mhr: MHR) -> dict:
     fig.savefig(sheet, dpi=50)
     plt.close(fig)
     return {"episode": meta["episode"], "status": status, "checks": checks, "sheet": os.path.basename(sheet),
-            "sheet_time": time_sheet, "time": time_stats, "version": REVIEW_VERSION,
+            "sheet_time": time_sheet, "time": time_stats, "sheet_concerns": conc_sheet, "concerns": conc_stats,
+            "version": REVIEW_VERSION,
             "height_m": height, "body_minus_moge_cm": dz_med, "moge_over_body_ratio": ratio_med,
             "seconds": meta.get("stage2_seconds")}
 
@@ -460,6 +696,8 @@ def main() -> None:
             out.append(f"<a href='review/{r['sheet']}'><img src='review/{r['sheet']}'></a>")
             if r.get("sheet_time"):
                 out.append(f"<a href='review/{r['sheet_time']}'><img src='review/{r['sheet_time']}'></a>")
+            if r.get("sheet_concerns"):
+                out.append(f"<a href='review/{r['sheet_concerns']}'><img src='review/{r['sheet_concerns']}'></a>")
     out.append("</body></html>")
     open(os.path.join(args.stage_dir, "index.html"), "w", encoding="utf-8").write("\n".join(out))
     print(f"wrote {os.path.join(args.stage_dir, 'index.html')}")

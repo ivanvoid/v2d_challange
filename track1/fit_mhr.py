@@ -53,6 +53,13 @@ def main() -> None:
                     help="temporal Gaussian sigma (frames) applied to vertices before fitting; 0 = off")
     ap.add_argument("--precision", default="float32", choices=["float32", "float64"])
     ap.add_argument("--device", default=None)
+    ap.add_argument("--profile", action="store_true",
+                    help="time each fit phase and record every outlier re-solve -> <out>.profile.json (fit_profile.py)")
+    ap.add_argument("--outlier_floor_mm", type=float, default=10.0,
+                    help="a frame is re-solved as an outlier only if its mean vertex error is ALSO above this "
+                         "(the kit's rule alone, 2 x median + 0.02 mm, flags hard-but-fine poses: on episode 1 it "
+                         "re-solved 71 frames at ~3 mm error for 0.003-0.2 mm gain and 61%% of the fit time); "
+                         "0 = the kit's rule unchanged")
     args = ap.parse_args()
 
     mesh = torch.load(args.mesh, map_location="cpu", weights_only=False)
@@ -79,8 +86,20 @@ def main() -> None:
         window = window[nearest]
 
     if args.smooth_sigma > 0:
-        window = gaussian_filter1d(window, args.smooth_sigma, axis=0, mode="nearest")
+        # odd reflection at both ends (2 x_0 - x_k): a body moving at constant speed is not pulled towards
+        # standing still at the clip edges (mode="nearest" did that; matters when the first scored frame
+        # is the first video frame, e.g. episode 11)
+        p = min(len(window) - 1, int(4 * args.smooth_sigma + 0.5))
+        padded = np.concatenate([2 * window[:1] - window[p:0:-1], window, 2 * window[-1:] - window[-2:-p - 2:-1]])
+        window = gaussian_filter1d(padded, args.smooth_sigma, axis=0, mode="nearest")[p:p + len(window)]
 
+    import mesh_to_mhr_params as kit_fit
+    if args.outlier_floor_mm > 0:
+        floor = args.outlier_floor_mm
+        kit_fit.is_outlier = lambda err, med: err > max(2 * med + 0.02, floor)
+    if args.profile:
+        import fit_profile
+        fit_profile.install(kit_fit)
     out = convert(window, str(args.model), device=args.device, precision=args.precision,
                   log=lambda *x, **k: print(*x, **k, file=sys.stderr, flush=True))
 
@@ -97,9 +116,16 @@ def main() -> None:
         "smooth_sigma": args.smooth_sigma,
         "finite_input_frames": int(finite.sum()),
         "window_frames": int(len(finite)),
+        "filled_nonfinite_video_frames": [int(v_lo + i) for i in np.flatnonzero(~finite)],
     })
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    if args.profile:
+        prof = fit_profile.report()
+        for r in prof["flagged"]:
+            r["video_frame"] = int(v_lo + r["frame"])
+        prof["seconds_total"] = report.get("seconds")
+        json.dump(prof, open(args.out.with_suffix(".profile.json"), "w"), indent=1)
     np.savez(
         args.out,
         pose=pose,
