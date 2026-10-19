@@ -254,6 +254,8 @@ for N in $EP_LIST; do
         5) { "$PY_REVIEW" "$T1/stage5_pick.py" --episode "$N" --out_root "$OUT" 2>> "$SDIR/$EP.debug.log" \
              && "$PY_PIPE" "$T1/stage5_mesh.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                     --debug_log "$SDIR/$EP.debug.log" \
+             && "$PY_FP" "$T1/stage5_scale.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
+                    --debug_log "$SDIR/$EP.debug.log" \
              && "$PY_FP" "$T1/stage5_check.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                     --debug_log "$SDIR/$EP.debug.log" \
              && "$PY_FP" "$T1/stage5_refine.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \

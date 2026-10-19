@@ -48,6 +48,7 @@ sys.path.insert(0, str(KIT_TRACK1))
 from mesh_to_mhr_params import MHR  # noqa: E402
 
 R_WRIST_2D, L_WRIST_2D = 41, 62  # mhr70 keypoints
+REVIEW_VERSION = 2          # bump when checks change: older checks.json files are recomputed
 
 
 def load_depth(path: str) -> np.ndarray:
@@ -86,6 +87,170 @@ def accel_cm(x: np.ndarray) -> np.ndarray:
     a = np.full(len(x), np.nan)
     a[1:-1] = np.linalg.norm(x[:-2] - 2 * x[1:-1] + x[2:], axis=-1).mean(-1) * 100
     return a
+
+
+JOINTS22 = [1, 2, 18, 35, 3, 19, 36, 4, 20, 37, 8, 24, 110, 74, 38, 113, 75, 39, 76, 40, 78, 42]  # scorer's ACC-H joints
+
+
+def runs_of(frames: np.ndarray) -> list[np.ndarray]:
+    cut = np.flatnonzero(np.diff(frames) != 1) + 1
+    return np.split(np.arange(len(frames)), cut)
+
+
+def time_checks(ep_dir: str, meta: dict, review_dir: str, K: np.ndarray, hw, boxes: np.ndarray,
+                scores: np.ndarray, raw_v: np.ndarray, faces: np.ndarray, fit_v: np.ndarray,
+                fit_j: np.ndarray, err: np.ndarray, err_lo: int, vf: np.ndarray) -> tuple[list, str, dict]:
+    """Scored-frame checks of the body over time (second sheet, review/<ep>_body_time.png).
+
+    fit_v / fit_j cover video frames vf = first..last; scored frames come from scored_spans.json
+    ("frames", with gaps). Body centre = mean of the scorer's 22 ACC-H joints (fitted) or of all
+    vertices (raw SAM3D-Body).
+    """
+    ep = f"episode_{meta['episode']:06d}"
+    off = meta["frame_offset"]
+    spans = json.load(open(paths.DATA / "submission" / "scored_spans.json"))[str(meta["episode"])]
+    scored = np.asarray(spans.get("frames", list(range(spans["first"], spans["last"] + 1))))
+    k_sc = scored - vf[0]                                         # index into fit arrays
+    runs = runs_of(scored)
+
+    # jitter of the 22 scored joints, per stretch (like the scorer)
+    j22 = fit_j[k_sc][:, JOINTS22]
+    acc22 = np.concatenate([np.linalg.norm(j22[r][:-2] - 2 * j22[r][1:-1] + j22[r][2:], axis=-1).mean(1) * 100
+                            for r in runs if len(r) >= 3] or [np.zeros(0)])
+
+    # body centre depth: raw SAM3D-Body vs fitted, every frame of first..last
+    loc = vf - off
+    raw_c = raw_v[loc].mean(1)                                    # [T, 3]
+    fit_c = fit_j[:, JOINTS22].mean(1)
+    bh = (boxes[loc, 3] - boxes[loc, 1]).astype(float)
+    rel2 = np.full(len(vf), np.nan)
+    rel2[1:-1] = np.abs(bh[:-2] - 2 * bh[1:-1] + bh[2:]) / bh[1:-1] * 100
+    dz_raw = np.full(len(vf), np.nan)
+    dz_raw[1:-1] = np.abs(raw_c[:-2, 2] - 2 * raw_c[1:-1, 2] + raw_c[2:, 2]) * 100
+    ok = np.isfinite(rel2) & np.isfinite(dz_raw)
+    corr_box_z = float(np.corrcoef(rel2[ok], dz_raw[ok])[0, 1]) if ok.sum() > 10 else float("nan")
+
+    # MoGe / body depth ratio on the body's own pixels, every 2nd scored frame
+    rows = []
+    for k in k_sc[::2]:
+        uv = project(fit_v[k], K)
+        b = depth_bias(fit_v[k], uv, load_depth(os.path.join(ep_dir, "depth", f"{vf[k] - off:06d}.png")))
+        if b:
+            rows.append((vf[k], fit_c[k, 2], b[1]))
+    rows = np.array(rows)
+    ratio = rows[:, 2]
+    from scipy.ndimage import median_filter
+    slow = median_filter(ratio, size=min(9, len(ratio) | 1), mode="nearest")    # ~18 frames
+    drift_pct = float((np.percentile(slow, 95) - np.percentile(slow, 5)) / np.median(slow) * 100)
+    drift_cm = float(drift_pct / 100 * np.median(rows[:, 1]) * 100)
+    moge_body_z = rows[:, 1] * rows[:, 2] / np.median(rows[:, 2])            # MoGe depth in body scale
+    ratio_depth_corr = float(np.corrcoef(rows[:, 1], ratio)[0, 1]) if len(rows) > 10 and np.ptp(rows[:, 1]) > 0.05 else float("nan")
+    ratio_per_m = float(np.polyfit(rows[:, 1], ratio / np.median(ratio), 1)[0] * 100) if len(rows) > 10 else float("nan")
+
+    # first scored frame card
+    f0 = int(scored[0]); k0 = f0 - vf[0]; l0 = f0 - off
+    nb = np.arange(k0, min(len(vf), k0 + 16))
+
+    def quad_residual(c: np.ndarray) -> float:
+        """Distance (cm) of frame k0 from a quadratic through the next 15 frames (motion-aware)."""
+        t = nb[1:] - k0
+        coef = np.polyfit(t, c[nb[1:]], 2)                                   # [3, 3]
+        pred = coef[-1]                                                      # value at t = 0
+        return float(np.linalg.norm(c[k0] - pred) * 100)
+    root_dev = quad_residual(fit_c) if len(nb) >= 6 else float("nan")
+    raw_dev = quad_residual(raw_c) if len(nb) >= 6 else float("nan")
+    rel = fit_j[:, JOINTS22] - fit_c[:, None]
+    win = slice(max(0, k0 - 7), min(len(vf), k0 + 8))
+    pose_dev = float(np.linalg.norm(rel[k0] - np.median(rel[win], axis=0), axis=-1).mean() * 100)
+    b0 = depth_bias(fit_v[k0], project(fit_v[k0], K), load_depth(os.path.join(ep_dir, "depth", f"{l0:06d}.png")))
+    ratio_dev = float((b0[1] / np.median(ratio) - 1) * 100) if b0 else float("nan")
+    e_idx = f0 - err_lo
+    err0 = float(err[e_idx]) if 0 <= e_idx < len(err) else float("nan")
+    margin = int(l0)                                              # processed frames before the first scored one
+    x0, y0, x1, y1 = boxes[l0]
+    border = bool(x0 <= 2 or y0 <= 2 or x1 >= hw[1] - 3 or y1 >= hw[0] - 3)
+    card = {"frame": f0, "detected": bool(scores[l0] > 0), "detector_score": float(scores[l0]),
+            "frames_before": margin, "box_touches_border": border, "fit_error_mm": err0,
+            "fit_error_median_mm": float(np.median(err)), "fitted_centre_off_curve_cm": root_dev,
+            "raw_centre_off_curve_cm": raw_dev, "pose_vs_neighbours_cm": pose_dev,
+            "moge_ratio_vs_episode_pct": ratio_dev}
+
+    stats = {"scored_frames": int(len(scored)), "stretches": len(runs),
+             "acc22_mean": float(acc22.mean()) if len(acc22) else 0.0,
+             "acc22_p95": float(np.percentile(acc22, 95)) if len(acc22) else 0.0,
+             "box_height_jitter_pct_median": float(np.nanmedian(rel2)),
+             "raw_depth_accel_cm_median": float(np.nanmedian(dz_raw)),
+             "box_jitter_vs_raw_depth_jitter_corr": corr_box_z,
+             "body_vs_moge_drift_pct": drift_pct, "body_vs_moge_drift_cm": drift_cm,
+             "ratio_vs_depth_corr": ratio_depth_corr, "ratio_change_pct_per_m": ratio_per_m,
+             "body_z_range_cm": float(np.ptp(rows[:, 1]) * 100), "moge_z_range_cm": float(np.ptp(moge_body_z) * 100),
+             "first_frame": card}
+    checks = []
+    def add(name, ok_, detail, level="WARN"):
+        checks.append({"check": name, "status": "PASS" if ok_ else level, "detail": detail})
+    add("first scored frame", card["detected"] and margin >= 5 and root_dev <= 5 and pose_dev <= 5
+        and abs(ratio_dev) <= 3 and not border,
+        f"video frame {f0}: {'detected' if card['detected'] else 'box INTERPOLATED'}, {margin} frames before it, "
+        f"body centre {root_dev:.1f} cm off the curve through the next 15 frames (raw {raw_dev:.1f}), pose {pose_dev:.1f} cm from "
+        f"neighbours, MoGe ratio {ratio_dev:+.1f}% vs episode, fit error {err0:.2f} mm"
+        f"{', box touches the border' if border else ''}")
+    add("body depth drift vs MoGe", drift_pct <= 4,
+        f"slow MoGe/body ratio range (5-95%) {drift_pct:.1f}% = {drift_cm:.0f} cm at the body; body depth range "
+        f"{stats['body_z_range_cm']:.0f} cm vs MoGe {stats['moge_z_range_cm']:.0f} cm over scored frames; ratio "
+        f"changes {ratio_per_m:+.1f}%/m with depth (corr {ratio_depth_corr:.2f})")
+    add("scored-joint jitter", stats["acc22_mean"] <= 0.2,
+        f"22 scored joints, per stretch: mean {stats['acc22_mean']:.3f}, p95 {stats['acc22_p95']:.3f} cm/frame²")
+    add("person box jitter", stats["box_height_jitter_pct_median"] <= 1.0,
+        f"box height |2nd diff| median {stats['box_height_jitter_pct_median']:.2f}%; raw body depth |2nd diff| "
+        f"median {stats['raw_depth_accel_cm_median']:.2f} cm/frame²; correlation {corr_box_z:.2f}")
+
+    # sheet: first frame crop + time series
+    fig = plt.figure(figsize=(22, 15))
+    gs = fig.add_gridspec(3, 3, height_ratios=[1.2, 1, 1])
+    img = cv2.cvtColor(cv2.imread(os.path.join(ep_dir, "frames", f"{l0:06d}.png")), cv2.COLOR_BGR2RGB)
+    sil = silhouette(project(fit_v[k0], K), faces, hw)
+    over = img.copy()
+    over[sil] = (0.45 * over[sil] + 0.55 * np.array([60, 140, 255])).astype(np.uint8)
+    h_ = y1 - y0
+    cx0, cy0, cx1, cy1 = int(max(0, x0 - 0.4 * h_)), int(max(0, y0 - 0.15 * h_)), int(min(hw[1], x1 + 0.4 * h_)), int(min(hw[0], y1 + 0.15 * h_))
+    cv2.rectangle(over, (int(x0), int(y0)), (int(x1), int(y1)), (255, 230, 0), 2)
+    ax = fig.add_subplot(gs[0, 0]); ax.imshow(over[cy0:cy1, cx0:cx1]); ax.axis("off")
+    ax.set_title(f"FIRST SCORED FRAME {f0} (the scorer aligns everything here)", fontsize=12)
+    ax = fig.add_subplot(gs[0, 1]); ax.axis("off")
+    ax.text(0, 1, "\n".join(f"{k}: {v:.2f}" if isinstance(v, float) else f"{k}: {v}" for k, v in card.items())
+            + "\n\n(centre = distance from a smooth curve\n through the next 15 frames)",
+            va="top", family="monospace", fontsize=12)
+    ax = fig.add_subplot(gs[0, 2])
+    ax.plot(rows[:, 0], (ratio / np.median(ratio) - 1) * 100, color="tab:gray", lw=0.8, label="per frame")
+    ax.plot(rows[:, 0], (slow / np.median(ratio) - 1) * 100, color="tab:red", lw=2, label="slow")
+    ax.axhline(0, color="k", lw=0.6); ax.legend(fontsize=9); ax.set_xlabel("video frame")
+    ax.set_title(f"MoGe/body depth ratio on body pixels (% vs median): drift {drift_pct:.1f}% = {drift_cm:.0f} cm")
+
+    def shade(ax):
+        for r in runs:
+            ax.axvspan(scored[r[0]], scored[r[-1]], color="tab:green", alpha=0.07)
+    ax = fig.add_subplot(gs[1, :2])
+    ax.plot(vf, raw_c[:, 2], color="tab:gray", lw=0.8, label="raw SAM3D-Body (per frame)")
+    ax.plot(vf, fit_c[:, 2], color="tab:blue", lw=2, label="fitted (submitted)")
+    ax.plot(rows[:, 0], moge_body_z, ".", color="tab:red", ms=4, label="MoGe on body pixels, in body scale")
+    ax.axvline(f0, color="k", ls="--", lw=1); shade(ax); ax.legend(fontsize=9); ax.set_xlabel("video frame")
+    ax.set_title("body centre depth (m) — green = scored stretches, dashed = first scored frame")
+    ax = fig.add_subplot(gs[1, 2])
+    ax.plot(vf, rel2, color="tab:orange", lw=0.8, label="box height |2nd diff| (%)")
+    ax.plot(vf, dz_raw, color="tab:gray", lw=0.8, label="raw depth |2nd diff| (cm/frame²)")
+    ax.set_yscale("log"); ax.legend(fontsize=9); shade(ax); ax.set_xlabel("video frame")
+    ax.set_title(f"person box jitter drives raw depth jitter? corr {corr_box_z:.2f}")
+    ax = fig.add_subplot(gs[2, :])
+    xs = np.concatenate([scored[r][1:-1] for r in runs if len(r) >= 3] or [np.zeros(0)])
+    ax.plot(xs, acc22, ".", color="tab:purple", ms=3)
+    shade(ax); ax.set_xlabel("video frame")
+    ax.set_title(f"22 scored joints |2nd diff| per scored frame (cm/frame²): mean {stats['acc22_mean']:.3f}")
+    fig.suptitle(f"{ep} — stage 2 body over time (scored frames: {len(scored)} in {len(runs)} stretches)", fontsize=16)
+    fig.tight_layout()
+    sheet = os.path.join(review_dir, f"{ep}_body_time.png")
+    fig.savefig(sheet, dpi=50)
+    plt.close(fig)
+    return checks, os.path.basename(sheet), stats
 
 
 def review_episode(ep_dir: str, review_dir: str, mhr: MHR) -> dict:
@@ -156,6 +321,15 @@ def review_episode(ep_dir: str, review_dir: str, mhr: MHR) -> dict:
         f"fitted {np.nanmean(a_fit):.3f} vs raw {np.nanmean(a_raw):.3f} cm/frame² (mean over vertices)")
     add("fit error", report["vertex_error_mm"]["mean"] <= 3,
         f"mean {report['vertex_error_mm']['mean']:.2f} mm, max {report['vertex_error_mm']['max']:.1f} mm")
+    os.makedirs(review_dir, exist_ok=True)
+    try:
+        tc, time_sheet, time_stats = time_checks(ep_dir, meta, review_dir, K, hw, boxes, scores, raw_v, faces,
+                                                 fit_v, fit_j, err, int(fit["fit_video_lo"]), vf)
+        checks += tc
+    except Exception as exc:                                    # a broken check must not hide the rest
+        import traceback; traceback.print_exc()
+        checks.append({"check": "time checks", "status": "WARN", "detail": f"could not run: {exc!r}"})
+        time_sheet, time_stats = None, None
 
     # ------------------------------------------------------------------ sheet
     sample = [int(round(i)) for i in np.linspace(0, len(vf) - 1, 6)]
@@ -219,6 +393,7 @@ def review_episode(ep_dir: str, review_dir: str, mhr: MHR) -> dict:
     fig.savefig(sheet, dpi=50)
     plt.close(fig)
     return {"episode": meta["episode"], "status": status, "checks": checks, "sheet": os.path.basename(sheet),
+            "sheet_time": time_sheet, "time": time_stats, "version": REVIEW_VERSION,
             "height_m": height, "body_minus_moge_cm": dz_med, "moge_over_body_ratio": ratio_med,
             "seconds": meta.get("stage2_seconds")}
 
@@ -245,8 +420,11 @@ def main() -> None:
             continue
         chk_path = os.path.join(args.stage_dir, f"episode_{e:06d}.checks.json")
         key_out = os.path.join(ep_dir, "body", "mhr_fit.npz")
+        newest = max(os.path.getmtime(p) for p in (key_out, os.path.join(ep_dir, "depth_scale.json"))
+                     if os.path.exists(p))
         reuse_ok = (os.path.exists(chk_path) and os.path.exists(key_out)
-                    and os.path.getmtime(chk_path) > os.path.getmtime(key_out)
+                    and os.path.getmtime(chk_path) > newest
+                    and json.load(open(chk_path)).get("version") == REVIEW_VERSION
                     and os.path.exists(os.path.join(review, json.load(open(chk_path)).get("sheet", "-"))))
         if reuse_ok:                      # sheet already up to date: reuse it
             results.append(json.load(open(chk_path)))
@@ -280,6 +458,8 @@ def main() -> None:
                 os.path.getmtime(os.path.join(args.stage_dir, "review", r["sheet"]))))
             out.append(f"<p style='color:#999'>sheet made at {made}</p>")
             out.append(f"<a href='review/{r['sheet']}'><img src='review/{r['sheet']}'></a>")
+            if r.get("sheet_time"):
+                out.append(f"<a href='review/{r['sheet_time']}'><img src='review/{r['sheet_time']}'></a>")
     out.append("</body></html>")
     open(os.path.join(args.stage_dir, "index.html"), "w", encoding="utf-8").write("\n".join(out))
     print(f"wrote {os.path.join(args.stage_dir, 'index.html')}")

@@ -8,10 +8,10 @@ For each frame in out/episode_XXXXXX/mesh/candidates.json, in mesh/cand_<frame>/
   mesh_transform.json, mesh_pretransformed.obj  SAM3D rotation + scale applied (camera-aligned)
   scale_init.json                            initial scale from the mask: mask width/height in metres
                                               (pixels x MoGe depth / f) vs the camera-aligned mesh's
-                                              x/y extent; geometric mean of the two ratios
-  mesh_scaled.obj, scale.json, ref_pose.json FoundationPose scale search in [init/1.6, init*1.6]
-                                              (log grid, 5 samples x 3 levels) + the pose at that frame
-Steps skip when their output exists. Model output goes to --debug_log.
+                                              x/y extent; geometric mean of the two ratios; search
+                                              range [init/1.6, init*1.6] for stage5_scale.py
+Steps skip when their output exists. Model output goes to --debug_log. The metric scale itself
+(mesh_scaled.obj, scale.json, ref_pose.json) is found by stage5_scale.py.
 
 Run with the pipeline interpreter and V2D_BACKEND=venv:
     python track1/stage5_mesh.py --episode 28 --out_root out --weights weights --debug_log ...
@@ -31,7 +31,6 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 import trimesh  # noqa: E402
 
-from v2d.foundation_pose.docker.run_estimate_mesh_scale import run_estimate_mesh_scale  # noqa: E402
 from v2d.pipelines.run_ego_wilor import _apply_sam3d_transform  # noqa: E402
 from v2d.sam3d.docker.run_image_to_mesh import run_image_to_mesh  # noqa: E402
 
@@ -90,22 +89,8 @@ def main() -> None:
              lambda: _apply_sam3d_transform(os.path.join(C, "textured_mesh.obj"),
                                             os.path.join(C, "mesh_transform.json"),
                                             os.path.join(C, "mesh_pretransformed.obj"))),
-            ("FoundationPose scale search", os.path.join(C, "mesh_scaled.obj"),
-             lambda: run_estimate_mesh_scale(mesh_path=os.path.join(C, "mesh_pretransformed.obj"), rgb_path=rgb,
-                                             depth_path=depth, mask_path=mask, intrinsics_path=intr,
-                                             weights_dir=f"{Wt}/foundation_pose",
-                                             scale_path=os.path.join(C, "scale.json"),
-                                             rescaled_mesh_path=os.path.join(C, "mesh_scaled.obj"),
-                                             pose_path=os.path.join(C, "ref_pose.json"),
-                                             lo=init_scale(C, f)["lo"], hi=init_scale(C, f)["hi"],
-                                             n_samples=5, n_levels=3, dev=False)),
         ]
         for name, out, fn in steps:
-            if name == "FoundationPose scale search" and not os.path.exists(out):
-                si = init_scale(C, f)
-                log(f"  {tag}: mask {si['mask_wh_m'][0]:.2f} x {si['mask_wh_m'][1]:.2f} m vs mesh "
-                    f"{si['mesh_wh_m'][0]:.2f} x {si['mesh_wh_m'][1]:.2f} m -> start scale {si['init_scale']:.2f}, "
-                    f"search {si['lo']:.2f}-{si['hi']:.2f}")
             if os.path.exists(out):
                 log(f"  {tag}: [skip] {name}")
                 continue
@@ -116,11 +101,11 @@ def main() -> None:
             if not os.path.exists(out):
                 raise SystemExit(f"{ep}: {name} for {tag} produced no {os.path.basename(out)}")
             log(f"  {tag}: [done] {name} in {time.time() - t0:.0f}s")
-        sc, si = json.load(open(os.path.join(C, "scale.json")))["scale"], init_scale(C, f)
-        edge = sc <= si["lo"] * 1.03 or sc >= si["hi"] / 1.03
+        si = init_scale(C, f)
         tex = os.path.exists(os.path.join(C, "material_0.png"))
-        log(f"  {tag}: scale {sc:.3f} (start {si['init_scale']:.2f}){'  WARNING: at the search edge' if edge else ''}"
-            f", texture {'yes' if tex else 'NO'}")
+        log(f"  {tag}: mask {si['mask_wh_m'][0]:.2f} x {si['mask_wh_m'][1]:.2f} m vs mesh "
+            f"{si['mesh_wh_m'][0]:.2f} x {si['mesh_wh_m'][1]:.2f} m -> start scale {si['init_scale']:.2f}, "
+            f"search {si['lo']:.2f}-{si['hi']:.2f}; texture {'yes' if tex else 'NO'}")
 
 
 if __name__ == "__main__":

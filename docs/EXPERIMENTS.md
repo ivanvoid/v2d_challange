@@ -19,7 +19,7 @@ the object translation per scored stretch (jitter, not the error).
 | # | Date | Name | Commit | Change (only this) | CD-H | CD-O | ACC-H | ACC-O | PEN | local PEN | gap cm | contact | accH | accO | Files |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | 2026-10-15 | baseline | `20b2d5c` | stages 1–8 as in HANDOFF.md | 15.716 | 37.420 | 0.1745 | 0.1274 | 0.1007 | 0.0966 | 12.38 | 0.454 | 0.131 | 0.115 | `submission/track1.parquet` |
-| 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | | | | | | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
+| 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
 
 ## Notes per experiment
 
@@ -39,3 +39,12 @@ signals disagree, which is what makes this submission informative.
 * local PEN 0.0966 → 0.0850
 If CD-O improves: trust the body's scale (and size consistency); the hands are what is misplaced.
 If CD-O gets worse: the hand-contact signal is the better guide for object placement.
+
+**Result: CD-O 37.42 → 43.29 (worse by 5.87), ACC-O 0.1274 → 0.1306, PEN 0.1007 → 0.0889, CD-H and
+ACC-H unchanged.** The contact signal predicted the direction; size consistency did not. Lessons:
+* place the object where the hands touch it on scored (contact) frames — not by the body's scale
+* object depth placement is a big lever: 8 episodes moved by 7–16 % in depth changed the
+  30-episode CD-O by ~6 cm (≈ 22 cm per changed episode)
+* local PEN is calibrated: Kaggle / local = 1.046 here, 1.042 for the baseline
+Next: choose the object's depth scale per episode continuously (not 3 variants) by minimising the
+hand–object gap on scored frames only, and check the gain locally before submitting.

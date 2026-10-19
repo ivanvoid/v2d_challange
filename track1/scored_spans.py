@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Extract the scored frame span of every Track 1 episode from the sample submission.
 
-Writes {"<episode>": {"first": int, "last": int, "n_scored": int}} as JSON.
+Writes {"<episode>": {"first": int, "last": int, "n_scored": int, "frames": [int, ...]}} as JSON;
+"frames" are the exact scored video frames (the hand-object contact span; may have gaps).
 Run with the submission venv (needs pandas + pyarrow):
 
     .venv-submit/bin/python track1/scored_spans.py \
@@ -37,6 +38,7 @@ def main() -> None:
             "first": int(frames.min()),
             "last": int(frames.max()),
             "n_scored": int(len(frames)),
+            "frames": sorted(int(f) for f in frames),   # the exact scored frames (contact span, with gaps)
         }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

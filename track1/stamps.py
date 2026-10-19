@@ -44,7 +44,7 @@ KIT_T1 = paths.KIT / "tools" / "track1"
 # stage: entry scripts (track1/), extra files, direct dependencies, input files, outputs
 STAGES = {
     "1": dict(code=["stage1_prep.py"], extra=[], deps=[],
-              inputs=["META_WINDOW", "intrinsics_stable.json", "depth_scale.json"], outputs=[]),
+              inputs=["META_WINDOW", "intrinsics_stable.json", "depth_scale.json", "floor.json"], outputs=[]),
     "2": dict(code=["fit_mhr.py"], extra=[KIT_T1 / "mesh_to_mhr_params.py"], deps=[],
               inputs=["META_WINDOW", "intrinsics_stable.json"], outputs=["body"]),
     "3": dict(code=["stage3_select.py"], extra=[T1 / "object_priors.json"], deps=["1", "2"],
@@ -54,7 +54,7 @@ STAGES = {
               deps=["1", "2", "3"], inputs=[],
               outputs=["masks", "masks_raw", "masks_fill", "masks_seed.json", "mask_prompts.json",
                        "masks_repair.json", "sam2_prompts.json"]),
-    "5": dict(code=["stage5_pick.py", "stage5_mesh.py", "stage5_check.py", "stage5_refine.py"],
+    "5": dict(code=["stage5_pick.py", "stage5_mesh.py", "stage5_scale.py", "stage5_check.py", "stage5_refine.py"],
               extra=[T1 / "object_priors.json"], deps=["1", "2", "4"], inputs=[],
               outputs=["mesh", "mesh_scaled.obj", "mesh_scaled_stage5c.obj", "mesh_scaled_stage5d.obj",
                        "material.mtl", "material_0.png"]),
@@ -69,7 +69,7 @@ STAGES = {
               outputs=["poses_final", "track/scale_match.json", "SUB_EPISODE"]),
 }
 # outputs that must exist for a stamp to count (a stamp without its result is stale)
-REQUIRED = {"1": ["depth_scale.json"], "2": ["body/mhr_fit.npz"], "3": ["object_track.json"],
+REQUIRED = {"1": ["depth_scale.json", "floor.json", "background.npz"], "2": ["body/mhr_fit.npz"], "3": ["object_track.json"],
             "4": ["masks_seed.json"], "5": ["mesh/refine.json"], "5e": ["mesh/object_choice.json"],
             "6": ["track/states.json"], "7": ["track/smooth.json"], "8": ["track/scale_match.json"]}
 
@@ -127,6 +127,9 @@ def inputs_of(e: int, stage: str) -> dict:
     out = {}
     for name in STAGES[stage]["inputs"]:
         if name == "META_WINDOW":
+            if not (W / "track1_meta.json").exists():
+                out[name] = None
+                continue
             m = json.load(open(W / "track1_meta.json"))
             out[name] = {k: m.get(k) for k in ("frame_offset", "n_frames", "scored_first", "scored_last", "margin")}
         elif name == "SEED":

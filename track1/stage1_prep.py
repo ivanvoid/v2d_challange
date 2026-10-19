@@ -9,6 +9,8 @@ Writes into out/episode_XXXXXX/:
   depth/                    depth_raw with MoGe's per-frame global scale swing removed (static
                             background held at its median depth); what all later stages read
   depth_scale.json          the per-frame scale factors and the swing that was removed
+  background.npz            static background depth (1/4 resolution) and per-pixel static fraction
+  floor.json                floor plane from the background (normal, offset, flatness, camera height/tilt)
   intrinsics_stable.json    temporal median of the per-frame intrinsics
   track1_meta.json          frame_offset, n_frames, scored span, source video
 
@@ -137,6 +139,9 @@ def stabilize_depth(frames: str, raw: str, out: str, report: str, scored: tuple[
         raise SystemExit("depth stabilisation: no frame has enough static background")
     scale = np.interp(np.arange(n), np.flatnonzero(ok), scale[ok])
     factor = np.exp(scale)
+    np.savez_compressed(os.path.join(os.path.dirname(out), "background.npz"),
+                        depth=np.exp(ref).astype(np.float32), static_fraction=static.mean(0).astype(np.float32),
+                        downsample=ds)
 
     tmp = out + ".tmp"
     os.makedirs(tmp, exist_ok=True)
@@ -161,6 +166,61 @@ def stabilize_depth(frames: str, raw: str, out: str, report: str, scored: tuple[
     json.dump(rep, open(report, "w"), indent=1)
     print(f"depth stabilisation: scored swing {pct.min():+.1f}..{pct.max():+.1f}%, jitter "
           f"{rep['scored_jitter_pct_median_abs_diff']:.2f}%/frame, {rep['frames_interpolated']} frames interpolated")
+
+
+def fit_floor(background: str, intr_path: str, out: str, thr: float = 0.03, iters: int = 400) -> None:
+    """Floor plane from the static background depth (background.npz, stabilised scale).
+
+    Candidates: pixels in the lower 45 % of the image that are static in >= 30 % of frames. RANSAC
+    (inlier distance `thr`), then a least-squares refit on the inliers. Plane: n . X = d with n the unit
+    normal pointing down (+y in the OpenCV camera frame), X in metres. Also reported: RMS of the inliers,
+    the angle between planes fitted to the near and the far half (bend), the fraction of candidates on
+    the plane, the camera height above it and the camera's downward tilt.
+    """
+    b = np.load(background)
+    D, frac, ds = b["depth"].astype(np.float64), b["static_fraction"], int(b["downsample"])
+    intr = json.load(open(intr_path))
+    fx, fy, cx, cy = intr["fx"] / ds, intr["fy"] / ds, intr["cx"] / ds, intr["cy"] / ds
+    H, W = D.shape
+    v, u = np.mgrid[0:H, 0:W]
+    P = np.stack([(u - cx) / fx * D, (v - cy) / fy * D, D], -1)
+    cand = (v > 0.55 * H) & np.isfinite(D) & (frac >= 0.3)
+    pts = P[cand]
+    if len(pts) < 100:
+        raise SystemExit(f"floor: only {len(pts)} static lower-image pixels")
+    rng = np.random.default_rng(0)
+    best_k, best = 0, None
+    for _ in range(iters):
+        a, b_, c = pts[rng.choice(len(pts), 3, replace=False)]
+        nrm = np.cross(b_ - a, c - a)
+        if np.linalg.norm(nrm) < 1e-9:
+            continue
+        nrm /= np.linalg.norm(nrm)
+        k = int((np.abs((pts - a) @ nrm) < thr).sum())
+        if k > best_k:
+            best_k, best = k, (a, nrm)
+
+    def plane(q):
+        c0 = q.mean(0)
+        nn = np.linalg.svd(q - c0, full_matrices=False)[2][-1]
+        return c0, nn * (1 if nn[1] >= 0 else -1)
+    a, nrm = best
+    inl = np.abs((pts - a) @ nrm) < thr
+    c0, nrm = plane(pts[inl])
+    inl = np.abs((pts - c0) @ nrm) < thr
+    c0, nrm = plane(pts[inl])
+    q = pts[inl]
+    res = (q - c0) @ nrm
+    zm = np.median(q[:, 2])
+    bend = float(np.degrees(np.arccos(min(1.0, abs(plane(q[q[:, 2] < zm])[1] @ plane(q[q[:, 2] >= zm])[1])))))
+    rep = {"normal": nrm.tolist(), "d": float(nrm @ c0), "rms_cm": float(np.sqrt(np.mean(res ** 2)) * 100),
+           "bend_deg": bend, "inlier_fraction": float(inl.mean()), "n_inliers": int(inl.sum()),
+           "camera_height_m": float(abs(nrm @ c0)), "camera_tilt_down_deg": float(np.degrees(np.arccos(abs(nrm[1])))),
+           "depth_range_m": [float(q[:, 2].min()), float(q[:, 2].max())], "inlier_threshold_m": thr,
+           "note": "plane n.X = d, n points down (+y), OpenCV camera frame, stabilised MoGe scale"}
+    json.dump(rep, open(out, "w"), indent=1)
+    print(f"floor: camera {rep['camera_height_m']:.2f} m above, tilted {rep['camera_tilt_down_deg']:.1f} deg down; "
+          f"RMS {rep['rms_cm']:.1f} cm, bend {bend:.1f} deg, {100 * rep['inlier_fraction']:.0f}% of candidates")
 
 
 def main() -> None:
@@ -252,8 +312,18 @@ def main() -> None:
     sw = json.load(open(depth_report))
     log(f"  depth scale swing removed: {sw['scored_swing_pct']['min']:+.1f}..{sw['scored_swing_pct']['max']:+.1f}% "
         f"(jitter {sw['scored_jitter_pct_median_abs_diff']:.2f}%/frame, {sw['frames_interpolated']} frames interpolated)")
+    floor = os.path.join(out, "floor.json")
+    background = os.path.join(out, "background.npz")
+    if not os.path.exists(background):          # made by older stabilisation runs without it: redo that step
+        stabilize_depth(frames, depth_raw, depth, depth_report, scored)
     timings["intrinsics"] = step("stabilise intrinsics", os.path.exists(intr_stable),
                                  lambda: stabilize_intrinsics(intr, intr_stable), args.debug_log)
+    timings["floor"] = step("floor plane (static background)",
+                            os.path.exists(floor) and os.path.getmtime(floor) > os.path.getmtime(background),
+                            lambda: fit_floor(background, intr_stable, floor), args.debug_log)
+    fl = json.load(open(floor))
+    log(f"  floor: camera {fl['camera_height_m']:.2f} m above, tilted {fl['camera_tilt_down_deg']:.1f} deg; "
+        f"RMS {fl['rms_cm']:.1f} cm, bend {fl['bend_deg']:.1f} deg")
 
     meta["stage1_seconds"] = {k: round(v, 1) for k, v in timings.items()}
     json.dump(meta, open(meta_path, "w"), indent=1)
