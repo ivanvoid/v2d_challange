@@ -4,6 +4,8 @@
 #
 #   ./run_stage.sh 1                      # stage 1 on the debug set (6 8 17 26 28)
 #   EPISODES="0-29" ./run_stage.sh 1      # stage 1 on everything
+#   EPISODES="0-29" ./run_stage.sh 5e     # one mesh per object, for the objects of these episodes
+#   FORCE=1 ...                           # run even if the stage is up to date
 #
 # Output: logs/stages/<NN_name>/
 #   batch.log                       everything this script printed
@@ -12,7 +14,10 @@
 #   episode_XXXXXX.checks.json      automatic checks
 #   review/                         review images
 #   index.html                      all episodes side by side — open this
-# Results go to out/episode_XXXXXX/ (stages skip work that is already complete).
+# Results go to out/episode_XXXXXX/. A stage is skipped only when its stamp (out/<ep>/stamps/<stage>.json,
+# track1/stamps.py) matches its current code, settings, inputs and upstream stamps; otherwise its old
+# outputs are moved to out/<ep>/_archive/<stage>/ and it runs from scratch. Upstream stages must be
+# stamped first (bottom-up). `python3 track1/stamps.py status` shows what is up to date.
 # =============================================================================
 set -uo pipefail
 
@@ -134,6 +139,7 @@ case "$STAGE" in
     3) NAME=03_select ;;
     4) NAME=04_mask ;;
     5) NAME=05_mesh ;;
+    5e) NAME=05e_object ;;
     6) NAME=06_track ;;
     7) NAME=07_smooth ;;
     8) NAME=08_final ;;
@@ -176,20 +182,66 @@ echo "===== stage $NAME  $(date -Is)  episodes: $EP_LIST ====="
 N_FAIL=0
 DONE_LIST=""
 T0=$SECONDS
+STAMPS="python3 $T1/stamps.py"
+
+if [[ "$STAGE" == "5e" ]]; then
+    # one mesh per object: the objects of the given episodes, each over all of its videos
+    OBJ_LIST="$(python3 -c "
+import json, sys
+meta = [json.loads(l) for l in open('$BASEPATH/challenge/track_1/meta/episodes_metadata.jsonl')]
+want = set(int(x) for x in '$EP_LIST'.split())
+print(' '.join(sorted({m['object'] for m in meta if m['episode_index'] in want})))")"
+    for O in $OBJ_LIST; do
+        VIDS="$(python3 -c "
+import json
+meta = [json.loads(l) for l in open('$BASEPATH/challenge/track_1/meta/episodes_metadata.jsonl')]
+print(' '.join(str(m['episode_index']) for m in meta if m['object'] == '$O'))")"
+        t=$SECONDS; ok=1; blocked=0
+        for V in $VIDS; do
+            $STAMPS check --episode "$V" --stage 5e > /dev/null; rc=$?
+            [[ $rc -eq 0 ]] || ok=0
+            [[ $rc -eq 2 ]] && blocked=1
+        done
+        if [[ $ok -eq 1 && -z "${FORCE:-}" ]]; then
+            echo "[$(date +%T)] $O: [skip] stage 5e is up to date (videos $VIDS)" | tee -a "$SDIR/$O.log"; continue
+        fi
+        if [[ $blocked -eq 1 ]]; then
+            for V in $VIDS; do $STAMPS check --episode "$V" --stage 5e; done | tee -a "$SDIR/$O.log"
+            N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $O FAILED: stage 5 not done for all of its videos"; continue
+        fi
+        echo "[$(date +%T)] $O: stage 5e on videos $VIDS" | tee -a "$SDIR/$O.log"
+        /opt/venvs/foundation_pose/bin/python "$T1/stage5_object.py" --object "$O" --out_root "$OUT" \
+            --weights "$WEIGHTS" --stage_dir "$SDIR" 2>> "$SDIR/$O.debug.log" | tee -a "$SDIR/$O.log"
+        rc=${PIPESTATUS[0]}
+        if [[ $rc -eq 0 ]]; then
+            for V in $VIDS; do $STAMPS write --episode "$V" --stage 5e || rc=1; done
+        fi
+        if [[ $rc -ne 0 ]]; then N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $O FAILED (exit $rc) after $((SECONDS - t))s"
+        else echo "[$(date +%T)] $O finished in $((SECONDS - t))s"; fi
+    done
+    echo "===== stage $NAME done in $(( (SECONDS - T0) / 60 )) min, $N_FAIL failure(s). Review: $SDIR/ ====="
+    [[ "$N_FAIL" -eq 0 ]]; exit $?
+fi
+
 for N in $EP_LIST; do
     EP="$(printf 'episode_%06d' "$N")"
     t=$SECONDS
-    # Stages 6-8: skip when the output is newer than everything it depends on.
-    W_="$OUT/$EP"
-    newer() { [[ -e "$1" ]] && for x in "${@:2}"; do [[ ! -e "$x" || "$1" -nt "$x" ]] || return 1; done; }
-    if { [[ "$STAGE" == 6 ]] && newer "$W_/track/states.json" "$W_/mesh_scaled.obj" "$W_/masks_seed.json"; } \
-       || { [[ "$STAGE" == 7 ]] && newer "$W_/track/smooth.json" "$W_/track/states.json"; } \
-       || { [[ "$STAGE" == 8 ]] && newer "$BASEPATH/submission/reports/$EP.json" "$W_/track/smooth.json" \
-                                         "$W_/body/mhr_fit.npz" "$W_/mesh_scaled.obj"; }; then
+    # Skip only when this stage's stamp matches its current code, settings, inputs and upstream stamps
+    # (track1/stamps.py). Otherwise its old outputs are archived and it runs from scratch.
+    $STAMPS check --episode "$N" --stage "$STAGE" > "$SDIR/.stamp_$N" 2>&1; src=$?
+    if [[ $src -eq 0 && -z "${FORCE:-}" ]]; then
         echo "[$(date +%T)] $EP: [skip] stage $STAGE output is up to date" | tee -a "$SDIR/$EP.log"
         DONE_LIST+="$N "
         continue
     fi
+    if [[ $src -eq 2 ]]; then
+        cat "$SDIR/.stamp_$N" | tee -a "$SDIR/$EP.log"
+        N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $EP FAILED: run the upstream stage(s) first"
+        continue
+    fi
+    echo "[$(date +%T)] $EP: $(cat "$SDIR/.stamp_$N")${FORCE:+ (FORCE=1)}" | tee -a "$SDIR/$EP.log"
+    if [[ "$STAGE" != 1 ]]; then $STAMPS archive --episode "$N" --stage "$STAGE" | tee -a "$SDIR/$EP.log"; fi
+    rm -f "$SDIR/.stamp_$N"
     case "$STAGE" in
         1) "$PY_PIPE" "$T1/stage1_prep.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                --spans "$SPANS" --debug_log "$SDIR/$EP.debug.log" 2>&1 | tee -a "$SDIR/$EP.log"
@@ -219,6 +271,9 @@ for N in $EP_LIST; do
     if [[ $rc -ne 0 ]]; then
         N_FAIL=$((N_FAIL + 1))
         echo "[$(date +%T)] $EP FAILED (exit $rc) after $((SECONDS - t))s — see $SDIR/$EP.log and $EP.debug.log"
+    elif ! $STAMPS write --episode "$N" --stage "$STAGE" 2>&1 | tee -a "$SDIR/$EP.log"; then
+        N_FAIL=$((N_FAIL + 1))
+        echo "[$(date +%T)] $EP FAILED: finished but could not be stamped (outputs missing?)"
     else
         echo "[$(date +%T)] $EP finished in $((SECONDS - t))s"
     fi

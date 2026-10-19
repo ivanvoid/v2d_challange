@@ -15,7 +15,7 @@ every video before the next stage.
 | `track1/stage6_overrides.json` | per-episode tracking settings chosen after review |
 | `run_stage.sh` | run ONE stage on a set of episodes + build its review page |
 | `run_stage_2gpu.sh` | the same, split over two GPUs (two tmux sessions) |
-| `run_rest.sh` | stage 5 (missing) → 5e → 6 → 7 → 8 on all episodes, two GPUs |
+| `run_rest.sh` | a range of stages (default 3 → 4 → 5 → 5e → 6 → 7 → 8) on all episodes, two GPUs |
 | `render_results.py` | render body + object over frames (video or review sheet) |
 | `legacy/` | earlier drivers kept for reference (not used by the current pipeline) |
 | `docs/` | setup notes, audit and stabilisation notes |
@@ -54,10 +54,22 @@ export V2D_DATA=/local-data/ivan/v2d
 ./run_stage.sh 1                                   # stage 1 on the debug set (6 8 17 26 28)
 EPISODES="0-29" ./run_stage.sh 2                   # one stage, chosen episodes
 ./run_stage_2gpu.sh 6 "0 2" "0-29"                 # one stage on two GPUs
-GPUS="0 2" ./run_rest.sh                           # stages 5 → 5e → 6 → 7 → 8, two GPUs
+EPISODES="0-29" ./run_stage.sh 5e                  # one mesh per object (objects of these episodes)
+FROM=3 TO=8 GPUS="0 2" ./run_rest.sh               # stages 3 → 4 → 5 → 5e → 6 → 7 → 8, two GPUs (tmux!)
+python3 track1/stamps.py status                    # which stages are up to date per episode
 ```
-Each stage skips work whose output is complete and up to date. Review pages:
-`$V2D_DATA/logs/stages/<NN_stage>/index.html`.
+A stage is skipped only when its stamp (`out/<ep>/stamps/<stage>.json`) matches its current code,
+settings, inputs and upstream stamps; otherwise its old outputs move to `out/<ep>/_archive/<stage>/`
+and it runs from scratch. Upstream stages must be up to date first. `FORCE=1` re-runs anyway.
+Review pages: `$V2D_DATA/logs/stages/<NN_stage>/index.html`.
+
+## Local evaluation and experiments
+
+`track1/eval_local.py` reads a packed parquet exactly as the scorer does (scored frames only) and
+reports per episode: PEN (the scorer's method), hand–object gap and contact on scored frames,
+jitter of the 22 scored joints and of the object translation per stretch, object size across its
+3 videos. `compare` shows two runs side by side. Every Kaggle submission is recorded in
+`docs/EXPERIMENTS.md` with its commit, scores and local values.
 
 ## Submission
 
