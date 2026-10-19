@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Stage 1 (prep) for one episode: trim -> undistort -> frames -> MoGe depth -> intrinsics.
+"""Stage 1 (prep) for one episode: trim -> undistort -> frames -> MoGe depth -> depth scale stabilisation -> intrinsics.
 
 Writes into out/episode_XXXXXX/:
   video_trim.mp4            source frames [first-margin, last+margin] (lossless-ish H.264, crf 12)
   anycalib/                 AnyCalib intrinsics, distortion, undistorted.mp4
   frames/000000.png ...     undistorted frames; local frame i == video frame i + frame_offset
-  depth/, intrinsics/       MoGe per-frame depth (uint16 inverse) and intrinsics
+  depth_raw/, intrinsics/   MoGe per-frame depth (uint16 inverse) and intrinsics
+  depth/                    depth_raw with MoGe's per-frame global scale swing removed (static
+                            background held at its median depth); what all later stages read
+  depth_scale.json          the per-frame scale factors and the swing that was removed
   intrinsics_stable.json    temporal median of the per-frame intrinsics
   track1_meta.json          frame_offset, n_frames, scored span, source video
 
@@ -23,9 +26,13 @@ import argparse
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
+
+import cv2
+import numpy as np
 
 from v2d.anycalib.docker.run_video_to_calibration import (
     run_video_to_calibration as run_anycalib_video_to_calibration,
@@ -83,6 +90,79 @@ def step(name: str, done: bool, fn, debug_log: str) -> float:
     return dt
 
 
+def read_depth_px(path: str) -> np.ndarray:
+    return cv2.imread(path, cv2.IMREAD_UNCHANGED)
+
+
+def depth_from_px(px: np.ndarray) -> np.ndarray:
+    """uint16 inverse depth (v2d convention: px = 65535 / (depth_m + 1)) -> metres; 0 -> NaN (infinity)."""
+    d = 65535.0 / np.maximum(px.astype(np.float32), 1e-6) - 1.0
+    d[px == 0] = np.nan
+    return d
+
+
+def stabilize_depth(frames: str, raw: str, out: str, report: str, scored: tuple[int, int],
+                    ds: int = 4, min_static: float = 0.2) -> None:
+    """Remove MoGe's per-frame global depth scale swing using the static background.
+
+    The camera and the background are static, so the background must have the same depth in every
+    frame. Static pixels = colour within 20 of the episode's median background image (moving
+    pixels dilated by 7 px at 1/ds resolution) with valid depth. Per frame, the scale is the median
+    of log(depth / background depth) over static pixels (background re-estimated once after the
+    first scale estimate). Frames with less than min_static static pixels get the scale
+    interpolated from their neighbours. Each raw map is divided by its scale and written to `out`
+    in the same encoding; zero (infinite-depth) pixels stay zero.
+    """
+    names = sorted(f for f in os.listdir(raw) if f.endswith(".png"))
+    n = len(names)
+    im0 = read_depth_px(os.path.join(raw, names[0]))
+    H, W = im0.shape[0] // ds, im0.shape[1] // ds
+    rgb = np.zeros((n, H, W, 3), np.uint8)
+    logd = np.full((n, H, W), np.nan, np.float32)
+    for i, name in enumerate(names):
+        rgb[i] = cv2.resize(cv2.imread(os.path.join(frames, name)), (W, H), interpolation=cv2.INTER_AREA)
+        d = cv2.resize(depth_from_px(read_depth_px(os.path.join(raw, name))), (W, H), interpolation=cv2.INTER_NEAREST)
+        logd[i] = np.log(d)
+    bg = np.median(rgb[::max(1, n // 150)], axis=0).astype(np.int16)
+    kernel = np.ones((7, 7), np.uint8)
+    static = np.stack([~cv2.dilate((np.abs(f.astype(np.int16) - bg).max(-1) > 20).astype(np.uint8), kernel).astype(bool)
+                       for f in rgb]) & np.isfinite(logd)
+    frac = static.reshape(n, -1).mean(1)
+    scale = np.zeros(n)
+    for _ in range(2):
+        ref = np.nanmedian(np.where(static, logd - scale[:, None, None], np.nan), axis=0)
+        scale = np.nanmedian(np.where(static, logd - ref[None], np.nan).reshape(n, -1), axis=1)
+    ok = (frac >= min_static) & np.isfinite(scale)
+    if not ok.any():
+        raise SystemExit("depth stabilisation: no frame has enough static background")
+    scale = np.interp(np.arange(n), np.flatnonzero(ok), scale[ok])
+    factor = np.exp(scale)
+
+    tmp = out + ".tmp"
+    os.makedirs(tmp, exist_ok=True)
+    for i, name in enumerate(names):
+        px = read_depth_px(os.path.join(raw, name))
+        d = depth_from_px(px) / factor[i]
+        new = np.where(px == 0, 0, np.clip(np.rint(65535.0 / (d + 1.0)), 1, 65535)).astype(np.uint16)
+        cv2.imwrite(os.path.join(tmp, name), new)
+    if os.path.isdir(out):
+        shutil.rmtree(out)
+    os.replace(tmp, out)
+
+    s = slice(*scored)
+    pct = 100 * (factor[s] - 1)
+    rep = {"method": "per-frame median log ratio to the median static background", "downsample": ds,
+           "min_static_fraction": min_static,
+           "frames_interpolated": int((~ok).sum()),
+           "scored_swing_pct": {"p5": float(np.percentile(pct, 5)), "p95": float(np.percentile(pct, 95)),
+                                "min": float(pct.min()), "max": float(pct.max())},
+           "scored_jitter_pct_median_abs_diff": float(np.median(np.abs(np.diff(pct)))) if len(pct) > 1 else 0.0,
+           "factor": [round(float(f), 6) for f in factor], "static_fraction": [round(float(f), 3) for f in frac]}
+    json.dump(rep, open(report, "w"), indent=1)
+    print(f"depth stabilisation: scored swing {pct.min():+.1f}..{pct.max():+.1f}%, jitter "
+          f"{rep['scored_jitter_pct_median_abs_diff']:.2f}%/frame, {rep['frames_interpolated']} frames interpolated")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--episode", type=int, required=True)
@@ -122,8 +202,14 @@ def main() -> None:
     undist = os.path.join(anycalib, "undistorted.mp4")
     undist_intr = os.path.join(anycalib, "undistorted_intrinsics.json")
     frames, depth, intr = (os.path.join(out, d) for d in ("frames", "depth", "intrinsics"))
+    depth_raw = os.path.join(out, "depth_raw")
+    depth_report = os.path.join(out, "depth_scale.json")
     intr_stable = os.path.join(out, "intrinsics_stable.json")
     timings = {}
+    # episodes made before depth stabilisation: their depth/ is the raw MoGe output
+    if not os.path.isdir(depth_raw) and not os.path.exists(depth_report) and n_files(depth, ".png") == n:
+        os.rename(depth, depth_raw)
+        log("  moved the existing MoGe depth/ to depth_raw/ (made before depth stabilisation)")
 
     def trim():
         tmp = trimmed + ".tmp.mp4"
@@ -148,13 +234,24 @@ def main() -> None:
                              lambda: extract_images(undist, frames), args.debug_log)
     if n_files(frames, ".png") != n:
         raise SystemExit(f"frames: {n_files(frames, '.png')} extracted, expected {n}")
-    timings["depth"] = step("MoGe depth + intrinsics", n_files(depth, ".png") == n,
-                            lambda: run_moge_depth(video_path=undist, depth_folder=depth,
+    timings["depth"] = step("MoGe depth + intrinsics", n_files(depth_raw, ".png") == n,
+                            lambda: run_moge_depth(video_path=undist, depth_folder=depth_raw,
                                                    intrinsics_folder=intr, weights_path=f"{W}/moge",
                                                    input_intrinsics_path=undist_intr, dev=False),
                             args.debug_log)
+    if n_files(depth_raw, ".png") != n:
+        raise SystemExit(f"depth_raw: {n_files(depth_raw, '.png')} maps, expected {n} (truncated MoGe run?)")
+    scored = (span["first"] - lo, span["last"] - lo + 1)
+    timings["stabilize"] = step("stabilise depth scale (static background)",
+                                os.path.exists(depth_report) and n_files(depth, ".png") == n
+                                and os.path.getmtime(depth_report) > os.path.getmtime(depth_raw),
+                                lambda: stabilize_depth(frames, depth_raw, depth, depth_report, scored),
+                                args.debug_log)
     if n_files(depth, ".png") != n:
-        raise SystemExit(f"depth: {n_files(depth, '.png')} maps, expected {n} (truncated MoGe run?)")
+        raise SystemExit(f"depth: {n_files(depth, '.png')} stabilised maps, expected {n}")
+    sw = json.load(open(depth_report))
+    log(f"  depth scale swing removed: {sw['scored_swing_pct']['min']:+.1f}..{sw['scored_swing_pct']['max']:+.1f}% "
+        f"(jitter {sw['scored_jitter_pct_median_abs_diff']:.2f}%/frame, {sw['frames_interpolated']} frames interpolated)")
     timings["intrinsics"] = step("stabilise intrinsics", os.path.exists(intr_stable),
                                  lambda: stabilize_intrinsics(intr, intr_stable), args.debug_log)
 
