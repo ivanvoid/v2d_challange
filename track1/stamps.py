@@ -55,11 +55,15 @@ STAGES = {
               outputs=["masks", "masks_raw", "masks_fill", "masks_prob", "masks_pass", "masks_conf.json",
                        "masks_seed.json", "mask_prompts.json", "masks_repair.json", "masks_quality.json",
                        "sam2_prompts.json"]),
-    "5": dict(code=["stage5_pick.py", "stage5_mesh.py", "stage5_scale.py", "stage5_check.py", "stage5_refine.py"],
-              extra=[T1 / "object_priors.json"], deps=["1", "2", "4"], inputs=[],
-              outputs=["mesh", "mesh_scaled.obj", "mesh_scaled_stage5c.obj", "mesh_scaled_stage5d.obj",
-                       "material.mtl", "material_0.png"]),
-    "5e": dict(code=["stage5_object.py", "stage5_validate.py"], extra=[], deps=["5"], inputs=["OBJECT_VIDEOS"], outputs=[]),
+    # 5 = generation (expensive: SAM3D); 5c = per-video selection (cheap): a scoring change reruns 5c + 5e only
+    "5": dict(code=["stage5_pick.py", "stage5_mesh.py", "sam3d_batch.py", "stage5_scale.py"],
+              extra=[T1 / "object_priors.json"], deps=["1", "2", "4"], inputs=[], outputs=["mesh"]),
+    "5c": dict(code=["stage5_check.py"], extra=[], deps=["4", "5"], inputs=[], outputs=["mesh/choice.json"]),
+    # 5e is the only writer of the final mesh (out/<ep>/mesh_scaled.obj + material)
+    "5e": dict(code=["stage5_object.py", "stage5_validate.py", "viz.py"], extra=[], deps=["5c"],
+               inputs=["OBJECT_VIDEOS"],
+               outputs=["mesh_scaled.obj", "material.mtl", "material_0.png", "mesh/object_choice.json",
+                        "mesh/validate.json"]),
     "6": dict(code=["stage6_track.py"], extra=[], deps=["1", "2", "4", "5e"], inputs=["OVERRIDES"],
               outputs=["poses", "track/states.json"]),
     "7": dict(code=["stage7_smooth.py"], extra=[], deps=["6"], inputs=[],
@@ -71,7 +75,7 @@ STAGES = {
 }
 # outputs that must exist for a stamp to count (a stamp without its result is stale)
 REQUIRED = {"1": ["depth_scale.json", "floor.json", "background.npz"], "2": ["body/mhr_fit.npz", "body/person_track.json", "body/depth_trend.json"], "3": ["object_track.json"],
-            "4": ["masks_seed.json", "masks_quality.json"], "5": ["mesh/refine.json"], "5e": ["mesh/object_choice.json", "mesh/validate.json"],
+            "4": ["masks_seed.json", "masks_quality.json"], "5": ["mesh/candidates.json"], "5c": ["mesh/choice.json"], "5e": ["mesh/object_choice.json", "mesh/validate.json"],
             "6": ["track/states.json"], "7": ["track/smooth.json"], "8": ["track/scale_match.json"]}
 
 
@@ -157,7 +161,7 @@ def params_of(stage: str) -> dict:
 
 
 def dep_ids(e: int, stage: str) -> tuple[dict, list[str]]:
-    """Ids of the upstream stamps; stage 5e depends on stage 5 of every video of the object."""
+    """Ids of the upstream stamps; stage 5e depends on stage 5c of every video of the object."""
     ids, missing = {}, []
     for d in STAGES[stage]["deps"]:
         eps = episode_object(e)[1] if stage == "5e" else [e]
@@ -262,7 +266,7 @@ def expand(spec: list[str]) -> list[int]:
 
 
 def status(eps: list[int]) -> None:
-    order = ["1", "2", "3", "4", "5", "5e", "6", "7", "8"]
+    order = ["1", "2", "3", "4", "5", "5c", "5e", "6", "7", "8"]
     sym = {0: "ok", 1: "STALE", 2: "-"}
     print("ep  " + "".join(f"{s:>7s}" for s in order))
     for e in eps:

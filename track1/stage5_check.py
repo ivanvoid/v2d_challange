@@ -12,8 +12,9 @@ depth. On each frame:
 A mesh with the right shape and size fits every frame; a wrong one only fits its own.
 Chosen = highest (median IoU + median coverage) / 2 over the check frames (its own frame excluded).
 
-Writes mesh/cand_<frame>/check.json (poses as 4x4 object-to-camera matrices + scores),
-mesh/choice.json, and copies the chosen mesh to out/episode_XXXXXX/mesh_scaled.obj.
+Writes mesh/cand_<frame>/check.json (poses as 4x4 object-to-camera matrices + scores) and
+mesh/choice.json. It is cheap (no SAM3D): changing this scoring reruns only 5c and 5e, not generation.
+The final mesh (out/episode_XXXXXX/mesh_scaled.obj) is written by stage 5e, across the object's videos.
 
 Run with the foundation_pose venv:
     /opt/venvs/foundation_pose/bin/python track1/stage5_check.py --episode 28 --out_root out \
@@ -24,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 
 import numpy as np
@@ -127,15 +127,10 @@ def main() -> None:
     for r in results:
         r["score"] = (r["median_iou"] + r["median_coverage"]) / 2
     best = max(results, key=lambda r: r["score"])
-    src = os.path.join(W, "mesh", f"cand_{best['candidate']:06d}")
-    shutil.copy(os.path.join(src, "mesh_scaled.obj"), os.path.join(W, "mesh_scaled.obj"))
-    for name in os.listdir(src):  # the OBJ's material + texture image, referenced by relative path
-        if name.endswith((".mtl", ".png")) and name.startswith("material"):
-            shutil.copy(os.path.join(src, name), os.path.join(W, name))
     json.dump({"chosen": best["candidate"], "chosen_video_frame": best["video_frame"],
                "candidates": [{k: v for k, v in r.items() if k != "frames"} for r in results],
                "check_frames": check}, open(os.path.join(W, "mesh", "choice.json"), "w"), indent=1)
-    log(f"{ep}: stage 5 OK — chose the mesh from video frame {best['video_frame']} "
+    log(f"{ep}: stage 5c OK — best of this video's candidates: the mesh from video frame {best['video_frame']} "
         f"(cross-frame IoU {best['median_iou']:.2f}, coverage {best['median_coverage']:.2f}, extent {best['extent_m']:.2f} m)")
 
 

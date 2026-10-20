@@ -2,7 +2,8 @@
 """Stage 5b' — metric scale of each candidate mesh (FoundationPose grid search, corrected scoring).
 
 Same coarse-to-fine search as the library's estimate_scale_grid_search (log grid, n_samples per level,
-range halved around the winner each level, FoundationPose register() per candidate scale), but every
+range halved around the winner each level, FoundationPose register() per candidate scale — a size already
+tried on an earlier level is reused, not refitted), but every
 candidate is scored by rendering the CENTRED mesh with pose @ inv(tf_to_center). The library renders
 the centred mesh with the original mesh's pose, i.e. shifted by the mesh's centre offset (up to ~8 cm
 and 15-19 % of the object size on our meshes), which corrupts both terms of its score.
@@ -90,11 +91,17 @@ def main() -> None:
             tracker = FoundationPoseTracker(Mesh.load(os.path.join(C, "mesh_pretransformed.obj")), weights)
             log_lo, log_hi = np.log(si["lo"]), np.log(si["hi"])
             best = {"score": -np.inf, "scale": float(np.sqrt(si["lo"] * si["hi"]))}
+            seen = {}                                   # the levels overlap: a size already tried is not refitted
             for level in range(args.n_levels):
                 for s in np.exp(np.linspace(log_lo, log_hi, args.n_samples)):
-                    tracker.rescale_to(float(s))
-                    pose = tracker.register(rgb, depth, mask, intr, iteration=args.iters)
-                    r = {"level": level, "scale": float(s), **score_pose(tracker, pose, depth, mask, intr)}
+                    key = round(float(np.log(s)), 6)
+                    if key in seen:
+                        r = {**seen[key], "level": level, "cached": True}
+                    else:
+                        tracker.rescale_to(float(s))
+                        pose = tracker.register(rgb, depth, mask, intr, iteration=args.iters)
+                        r = {"level": level, "scale": float(s), **score_pose(tracker, pose, depth, mask, intr)}
+                        seen[key] = r
                     search.append(r)
                     if r["score"] > best["score"]:
                         best = r

@@ -4,7 +4,7 @@
 #
 #   FROM=3 TO=8 GPUS="0 2" ./run_rest.sh          (run inside tmux)
 #
-# Stage order: 3 4 5 5e 6 7 8 (stages 1-2 are run with run_stage.sh / run_stage_2gpu.sh).
+# Stage order: 3 4 5 5c 5e 6 7 8 (stages 1-2 are run with run_stage.sh / run_stage_2gpu.sh).
 # Every stage goes through run_stage.sh, so it is skipped per episode when its stamp is up to date
 # and otherwise re-run from scratch (old outputs archived) — see track1/stamps.py. Episodes are
 # split over the two GPUs by frame count; for 5e by object, so an object's videos stay together.
@@ -56,7 +56,7 @@ run_on_two() {  # $1 = stage: one run_stage.sh per GPU, wait for both
     return $rc
 }
 
-ORDER=(3 4 5 5e 6 7 8)
+ORDER=(3 4 5 5c 5e 6 7 8)
 say "===== start: stages $FROM..$TO on GPUs ${GPUS[*]} ====="
 on=0
 for st in "${ORDER[@]}"; do

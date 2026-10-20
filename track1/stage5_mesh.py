@@ -32,7 +32,6 @@ import numpy as np  # noqa: E402
 import trimesh  # noqa: E402
 
 from v2d.pipelines.run_ego_wilor import _apply_sam3d_transform  # noqa: E402
-from v2d.sam3d.docker.run_image_to_mesh import run_image_to_mesh  # noqa: E402
 
 
 def main() -> None:
@@ -71,20 +70,37 @@ def main() -> None:
         json.dump(r, open(path, "w"), indent=1)
         return r
 
+    # SAM3D for every candidate in ONE process (track1/sam3d_batch.py: the model is loaded once)
+    jobs = []
     for f in frames:
         C = os.path.join(W, "mesh", f"cand_{f:06d}")
         os.makedirs(C, exist_ok=True)
-        rgb, depth = os.path.join(W, "frames", f"{f:06d}.png"), os.path.join(W, "depth", f"{f:06d}.png")
-        mask = os.path.join(W, "masks", "1", f"{f:06d}.png")
+        if not os.path.exists(os.path.join(C, "textured_mesh.obj")):
+            mask = os.path.join(W, "masks", "1", f"{f:06d}.png")
+            jobs.append({"image_path": os.path.join(W, "frames", f"{f:06d}.png"), "mask_path": mask,
+                         "mesh_path": os.path.join(C, "textured_mesh.obj"),
+                         "transform_path": os.path.join(C, "mesh_transform.json"),
+                         "intrinsics_path": os.path.join(C, "mesh_intrinsics.json"),
+                         "depth_path": os.path.join(W, "depth", f"{f:06d}.png"), "depth_intrinsics_path": intr,
+                         "depth_mask_path": mask})
+    if jobs:
+        jp = os.path.join(W, "mesh", "sam3d_jobs.json")
+        json.dump(jobs, open(jp, "w"), indent=1)
+        log(f"  [run ] SAM3D for {len(jobs)} candidate(s) in one process (video frames "
+            f"{[int(os.path.basename(os.path.dirname(j['mesh_path']))[5:]) + off for j in jobs]})")
+        t0 = time.time()
+        import subprocess
+        with to_debug(args.debug_log, "SAM3D batch"):
+            subprocess.run([os.path.join(os.environ.get("V2D_VENV_ROOT", "/opt/venvs"), "sam3d", "bin", "python"),
+                            os.path.join(os.path.dirname(os.path.abspath(__file__)), "sam3d_batch.py"),
+                            "--jobs", jp, "--weights_dir", f"{Wt}/sam3d"], check=True)
+        log(f"  [done] SAM3D in {time.time() - t0:.0f}s")
+    for f in frames:
+        C = os.path.join(W, "mesh", f"cand_{f:06d}")
         tag = f"video frame {f + off}"
+        if not os.path.exists(os.path.join(C, "textured_mesh.obj")):
+            raise SystemExit(f"{ep}: SAM3D produced no mesh for {tag}")
         steps = [
-            ("SAM3D mesh", os.path.join(C, "textured_mesh.obj"),
-             lambda: run_image_to_mesh(image_path=rgb, mask_path=mask, mesh_path=os.path.join(C, "textured_mesh.obj"),
-                                       transform_path=os.path.join(C, "mesh_transform.json"),
-                                       intrinsics_path=os.path.join(C, "mesh_intrinsics.json"),
-                                       weights_dir=f"{Wt}/sam3d", seed=0, with_mesh_postprocess=True,
-                                       with_texture_baking=True, depth_path=depth,
-                                       depth_intrinsics_path=intr, depth_mask_path=mask, dev=False)),
             ("apply SAM3D transform", os.path.join(C, "mesh_pretransformed.obj"),
              lambda: _apply_sam3d_transform(os.path.join(C, "textured_mesh.obj"),
                                             os.path.join(C, "mesh_transform.json"),

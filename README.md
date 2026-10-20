@@ -15,7 +15,8 @@ every video before the next stage.
 | `track1/stage6_overrides.json` | per-episode tracking settings chosen after review |
 | `run_stage.sh` | run ONE stage on a set of episodes + build its review page |
 | `run_stage_2gpu.sh` | the same, split over two GPUs (two tmux sessions) |
-| `run_rest.sh` | a range of stages (default 3 → 4 → 5 → 5e → 6 → 7 → 8) on all episodes, two GPUs |
+| `run_stage_pool.sh` | one per-episode stage as a queue over several workers (`WORKERS="0 0 2 2"`) |
+| `run_rest.sh` | a range of stages (default 3 → 4 → 5 → 5c → 5e → 6 → 7 → 8) on all episodes, two GPUs |
 | `render_results.py` | render body + object over frames (video or review sheet) |
 | `legacy/` | earlier drivers kept for reference (not used by the current pipeline) |
 | `docs/` | setup notes, audit and stabilisation notes |
@@ -38,11 +39,12 @@ and receives `out/` (per-episode results), `logs/stages/` (review pages), `submi
 | # | Stage | Main outputs (`out/episode_XXXXXX/`) |
 |---|---|---|
 | 1 | trim to the scored span, AnyCalib undistortion, frames, MoGe depth, stable intrinsics | `frames/ depth/ intrinsics_stable.json` |
-| 2 | person track (detectron2) → SAM3D-Body (real intrinsics) → one-identity MHR fit | `body/mhr_fit.npz` |
-| 3 | object selection: V-wedge background cover, prompt ladder + mirror + hand zoom views, gates on size / depth / distance to the actor, whole-object box | `object_track.json` |
-| 4 | SAM2 masks: boxes from stage 3 + negative points on the body, gap fill by re-detection, leak repair | `masks/1/` |
-| 5 | two SAM3D textured meshes per video, metric scale search, cross-frame check, multi-frame scale refine | `mesh/` |
-| 5e | one mesh per physical object: every candidate tested on frames of all its 3 videos | `mesh_scaled.obj`, `mesh/object_choice.json` |
+| 2 | person tracking with masks (detectron2, fragment joining, actor choice) → SAM3D-Body (box + person mask) → one-identity MHR fit → body depth follows the stabilised MoGe trend | `body/mhr_fit.npz` |
+| 3 | object selection: V-wedge background cover, prompt ladder + mirror + hand zoom views, gates on size / depth / distance to the actor, size-consistent supports; an option must also agree in size (×1.6) with the same object in at least one of its other videos; whole-object box | `object_track.json` |
+| 4 | SAM2 masks: boxes from stage 3 + negative points on the body, backward/forward passes averaged, per-frame quality classes, gated recovery and leak repair, acceptance check | `masks/1/ masks_quality.json` |
+| 5 | **generation** (expensive): 3 diverse clear views per video → SAM3D textured meshes (one process, model loaded once) → metric scale search (each size fitted once) | `mesh/candidates.json mesh/cand_*/` |
+| 5c | **per-video selection** (cheap): every candidate fitted on frames it was not built from, scored by (IoU + coverage) / 2 | `mesh/choice.json` |
+| 5e | **one mesh per physical object**: every candidate of the object at sizes ×0.9/1.0/1.1 on frames of all 3 videos, finalists refined; then the exported mesh is validated on held-out frames of each video (accept: median IoU and coverage thresholds) | `mesh_scaled.obj mesh/object_choice.json mesh/validate.json` |
 | 6 | FoundationPose tracking: anchors, bidirectional chains with hand-over, global (Viterbi) selection | `poses/ track/states.json` |
 | 7 | whole-sequence smoothing with outlier rejection | `poses_smoothed/` |
 | 8 | object scale matched to the body, submission files, QA | `poses_final/`, `submission/episodes/` |
@@ -54,8 +56,10 @@ export V2D_DATA=/local-data/ivan/v2d
 ./run_stage.sh 1                                   # stage 1 on the debug set (6 8 17 26 28)
 EPISODES="0-29" ./run_stage.sh 2                   # one stage, chosen episodes
 ./run_stage_2gpu.sh 6 "0 2" "0-29"                 # one stage on two GPUs
-EPISODES="0-29" ./run_stage.sh 5e                  # one mesh per object (objects of these episodes)
-FROM=3 TO=8 GPUS="0 2" ./run_rest.sh               # stages 3 → 4 → 5 → 5e → 6 → 7 → 8, two GPUs (tmux!)
+WORKERS="0 2" EPISODES="0-29" ./run_stage_pool.sh 5   # SAM3D generation (1 worker per GPU: memory)
+EPISODES="0-29" ./run_stage.sh 5c                  # per-video selection (re-run alone after a scoring change)
+EPISODES="0-29" ./run_stage.sh 5e                  # one mesh per object (objects of these episodes) + validation
+FROM=3 TO=8 GPUS="0 2" ./run_rest.sh               # stages 3 → 4 → 5 → 5c → 5e → 6 → 7 → 8, two GPUs (tmux!)
 python3 track1/stamps.py status                    # which stages are up to date per episode
 ```
 A stage is skipped only when its stamp (`out/<ep>/stamps/<stage>.json`) matches its current code,

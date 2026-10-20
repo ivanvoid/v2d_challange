@@ -4,7 +4,9 @@
 #
 #   ./run_stage.sh 1                      # stage 1 on the debug set (6 8 17 26 28)
 #   EPISODES="0-29" ./run_stage.sh 1      # stage 1 on everything
-#   EPISODES="0-29" ./run_stage.sh 5e     # one mesh per object, for the objects of these episodes
+#   EPISODES="0-29" ./run_stage.sh 5      # stage 5 = SAM3D generation (pick + mesh + scale)
+#   EPISODES="0-29" ./run_stage.sh 5c     # per-video selection (cheap; re-run after a scoring change)
+#   EPISODES="0-29" ./run_stage.sh 5e     # one mesh per object, for the objects of these episodes, + validation
 #   FORCE=1 ...                           # run even if the stage is up to date
 #   NO_REVIEW=1 ...                       # skip building the review (run_stage_pool.sh does it per episode)
 #   REVIEW_ONLY=1 ...                     # only build the review of these episodes (no lock, no index merge)
@@ -148,6 +150,7 @@ case "$STAGE" in
     3) NAME=03_select ;;
     4) NAME=04_mask ;;
     5) NAME=05_mesh ;;
+    5c) NAME=05c_check ;;
     5e) NAME=05e_object ;;
     6) NAME=06_track ;;
     7) NAME=07_smooth ;;
@@ -175,7 +178,7 @@ build_review() {  # $1 = episodes to include; rebuilds review/ sheets and index.
                --model "$MHR_MODEL" ;;
         3) "$PY_REVIEW" "$T1/review_stage3.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
         4) "$PY_REVIEW" "$T1/review_stage4.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
-        5) "$PY_REVIEW" "$T1/review_stage5.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
+        5c) "$PY_REVIEW" "$T1/review_stage5.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
         6) "$PY_REVIEW" "$T1/review_stage6.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
         7) "$PY_REVIEW" "$T1/review_stage7.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
         8) "$PY_REVIEW" "$T1/review_stage8.py" --episodes $L --out_root "$OUT" \
@@ -190,7 +193,7 @@ if [[ -n "${REVIEW_ONLY:-}" ]]; then         # this episode's review only; the f
         2) "$PY_REVIEW" "$T1/review_stage2.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" --model "$MHR_MODEL" ;;
         3) "$PY_REVIEW" "$T1/review_stage3.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
         4) "$PY_REVIEW" "$T1/review_stage4.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
-        5) "$PY_REVIEW" "$T1/review_stage5.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
+        5c) "$PY_REVIEW" "$T1/review_stage5.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
         6) "$PY_REVIEW" "$T1/review_stage6.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
         7) "$PY_REVIEW" "$T1/review_stage7.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
         8) "$PY_REVIEW" "$T1/review_stage8.py" --episodes $EP_LIST --out_root "$OUT" --sub_dir "$BASEPATH/submission" --stage_dir "$SDIR" ;;
@@ -232,6 +235,7 @@ print(' '.join(str(m['episode_index']) for m in meta if m['object'] == '$O'))")"
             N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $O FAILED: stage 5 not done for all of its videos"; continue
         fi
         echo "[$(date +%T)] $O: stage 5e on videos $VIDS" | tee -a "$SDIR/$O.log"
+        for V in $VIDS; do $STAMPS archive --episode "$V" --stage 5e | tee -a "$SDIR/$O.log"; done
         /opt/venvs/foundation_pose/bin/python "$T1/stage5_object.py" --object "$O" --out_root "$OUT" \
             --weights "$WEIGHTS" --stage_dir "$SDIR" 2>> "$SDIR/$O.debug.log" | tee -a "$SDIR/$O.log"
         rc=${PIPESTATUS[0]}
@@ -248,6 +252,8 @@ print(' '.join(str(m['episode_index']) for m in meta if m['object'] == '$O'))")"
         if [[ $rc -ne 0 ]]; then N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $O FAILED (exit $rc) after $((SECONDS - t))s"
         else echo "[$(date +%T)] $O finished in $((SECONDS - t))s"; fi
     done
+    [[ -n "${NO_REVIEW:-}" ]] || "$PY_REVIEW" "$T1/review_stage5e.py" --out_root "$OUT" --stage_dir "$SDIR" \
+        > "$SDIR/index_build.log" 2>&1 || echo "review index failed (see $SDIR/index_build.log)"
     echo "===== stage $NAME done in $(( (SECONDS - T0) / 60 )) min, $N_FAIL failure(s). Review: $SDIR/ ====="
     [[ "$N_FAIL" -eq 0 ]]; exit $?
 fi
@@ -284,12 +290,12 @@ for N in $EP_LIST; do
              && "$PY_PIPE" "$T1/stage5_mesh.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                     --debug_log "$SDIR/$EP.debug.log" \
              && "$PY_FP" "$T1/stage5_scale.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
-                    --debug_log "$SDIR/$EP.debug.log" \
-             && "$PY_FP" "$T1/stage5_check.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
-                    --debug_log "$SDIR/$EP.debug.log" \
-             && "$PY_FP" "$T1/stage5_refine.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
-                    --debug_log "$SDIR/$EP.debug.log" --sheet "$SDIR/review/${EP}_refine.png"; } 2>&1 | tee -a "$SDIR/$EP.debug.log" \
+                    --debug_log "$SDIR/$EP.debug.log"; } 2>&1 | tee -a "$SDIR/$EP.debug.log" \
              | grep --line-buffered -E '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]' | tee -a "$SDIR/$EP.log"
+           rc=${PIPESTATUS[0]} ;;
+        5c) "$PY_FP" "$T1/stage5_check.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
+               --debug_log "$SDIR/$EP.debug.log" 2>&1 | tee -a "$SDIR/$EP.debug.log" \
+               | grep --line-buffered -E '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]' | tee -a "$SDIR/$EP.log"
            rc=${PIPESTATUS[0]} ;;
         6) "$PY_FP" "$T1/stage6_track.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                --debug_log "$SDIR/$EP.debug.log" 2>> "$SDIR/$EP.debug.log" | tee -a "$SDIR/$EP.log"

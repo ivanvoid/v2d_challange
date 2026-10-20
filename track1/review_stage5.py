@@ -39,6 +39,7 @@ import trimesh  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import paths  # noqa: E402
+from viz import contrast_bg  # noqa: E402
 PRIORS = json.load(open(paths.PRIORS))
 META = str(paths.META)
 SLACK = 1.6
@@ -67,7 +68,7 @@ def render_view(v: np.ndarray, f: np.ndarray, col: np.ndarray, view: str, size: 
     shade = 0.35 + 0.65 * np.abs(n @ np.array(light, float))
     fc = col[f].mean(1) * shade[:, None]
     order = np.argsort(-depth[f].mean(1))       # far first
-    img = np.full((size, size, 3), 30, np.uint8)
+    img = np.full((size, size, 3), contrast_bg(col), np.uint8)    # a dark object stays visible
     pts = np.round(uv[f]).astype(np.int32)
     for i in order:
         cv2.fillConvexPoly(img, pts[i], tuple(int(c) for c in fc[i]))
@@ -216,13 +217,13 @@ def main() -> None:
         W = os.path.join(args.out_root, f"episode_{e:06d}")
         if not os.path.exists(os.path.join(W, "mesh", "choice.json")):
             for old in glob.glob(os.path.join(review, f"episode_{e:06d}_*.png")):   # stale sheet removed
-                if not any(t in os.path.basename(old) for t in ("_before_", "_v2_", "_v3_", "_old", "_refine")):
+                if not any(t in os.path.basename(old) for t in ("_before_", "_v2_", "_v3_", "_old")):
                     os.remove(old)
             results.append({"episode": e, "status": "FAIL", "checks": [{"check": "stage 5 output", "status": "FAIL",
                             "detail": "missing (see the episode log)"}]})
             continue
         chk_path = os.path.join(args.stage_dir, f"episode_{e:06d}.checks.json")
-        key_out = os.path.join(W, "mesh", "refine.json")
+        key_out = os.path.join(W, "mesh", "choice.json")
         reuse_ok = (os.path.exists(chk_path) and os.path.exists(key_out)
                     and os.path.getmtime(chk_path) > os.path.getmtime(key_out)
                     and os.path.exists(os.path.join(review, json.load(open(chk_path)).get("sheet", "-"))))
@@ -237,8 +238,9 @@ def main() -> None:
     color = {"PASS": "#4c4", "WARN": "#fb3", "FAIL": "#f55"}
     out = ["<html><head><meta charset='utf-8'><title>Stage 5 object mesh</title><style>body{font-family:"
            "sans-serif;background:#111;color:#eee} td,th{border:1px solid #444;padding:3px 7px} table{border-"
-           "collapse:collapse} img{max-width:100%}</style></head><body><h1>Stage 5 — object mesh (SAM3D + scale)</h1>"
-           "<p>Check: the mesh views look like the object (shape, proportions, parts like handles and wheels); the "
+           "collapse:collapse} img{max-width:100%}</style></head><body><h1>Stage 5c — per-video candidate meshes "
+           "(SAM3D + scale)</h1><p>These are each video's OWN candidates. The final mesh is chosen across the "
+           "object's videos and validated in <a href='../05e_object/index.html'>05e_object</a>.</p><p>Check: the mesh views look like the object (shape, proportions, parts like handles and wheels); the "
            "blue silhouette matches the green mask outline on frames the mesh was NOT built from.</p><table><tr>"
            "<th>episode</th><th>status</th><th>checks</th></tr>"]
     for r in results:
@@ -256,9 +258,6 @@ def main() -> None:
                 os.path.getmtime(os.path.join(args.stage_dir, "review", r["sheet"]))))
             out.append(f"<p style='color:#999'>sheet made at {made}</p>")
             out.append(f"<a href='review/{r['sheet']}'><img src='review/{r['sheet']}'></a>")
-        ref = f"episode_{r['episode']:06d}_refine.png"
-        if os.path.exists(os.path.join(args.stage_dir, "review", ref)):
-            out.append(f"<h3>multi-frame size + orientation audit</h3><a href='review/{ref}'><img src='review/{ref}'></a>")
     out.append("</body></html>")
     open(os.path.join(args.stage_dir, "index.html"), "w", encoding="utf-8").write("\n".join(out))
     print(f"wrote {os.path.join(args.stage_dir, 'index.html')}")

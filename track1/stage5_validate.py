@@ -31,6 +31,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from logutil import log, to_debug  # noqa: E402
+from viz import contrast_bg  # noqa: E402
 
 from v2d.common.datatypes import CameraIntrinsics, DepthImage, Mask  # noqa: E402
 from v2d.common.datatypes import Image as V2dImage  # noqa: E402
@@ -110,6 +111,8 @@ def main() -> None:
 
     # sheet: per held-out frame, image with the mask (green) and the rendered mesh (blue) outlines + the render
     import cv2
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
     tiles = []
     for p in per:
         img = p["_rgb"].copy()
@@ -120,31 +123,37 @@ def main() -> None:
         pad = int(0.3 * max(np.ptp(xs), np.ptp(ys))) + 20
         y0, y1, x0, x1 = max(0, ys.min() - pad), min(img.shape[0], ys.max() + pad), max(0, xs.min() - pad), min(img.shape[1], xs.max() + pad)
         crop = Image.fromarray(img[y0:y1, x0:x1]).resize((360, 360))
-        rend = Image.fromarray(np.clip(p["_render"] * (255 if p["_render"].max() <= 1.0 else 1), 0, 255).astype(np.uint8)
-                               [y0:y1, x0:x1]).resize((360, 360))
+        rc = np.clip(p["_render"] * (255 if p["_render"].max() <= 1.0 else 1), 0, 255).astype(np.uint8)
+        rc[~p["_sil"]] = contrast_bg(rc[p["_sil"]])           # a dark object must not vanish on a dark background
+        rend = Image.fromarray(rc[y0:y1, x0:x1]).resize((360, 360))
         t = Image.new("RGB", (720, 410), (20, 20, 20))
         t.paste(crop, (0, 50)); t.paste(rend, (360, 50))
         bad = p["iou"] < args.min_iou or p["coverage"] < args.min_cov
         dtxt = "n/a" if p["depth_cm"] is None else f"{p['depth_cm']:.1f} cm"
         ImageDraw.Draw(t).text((8, 8), f"video frame {p['video_frame']}: IoU {p['iou']:.2f}  coverage {p['coverage']:.2f}  "
-                                         f"depth {dtxt}", fill=(255, 80, 80) if bad else (230, 230, 230))
+                                         f"depth {dtxt}", fill=(255, 80, 80) if bad else (230, 230, 230), font=small)
         tiles.append(t)
     cols = 4
     rows = (len(tiles) + cols - 1) // cols
-    sheet = Image.new("RGB", (720 * cols, 410 * rows + 60), (0, 0, 0))
-    ImageDraw.Draw(sheet).text((10, 15), f"{ep} - FINAL model validation on held-out clear frames - "
-                                         f"{'ACCEPTED' if accepted else 'REJECTED'}: median IoU {med_iou:.2f} "
-                                         f"(>= {args.min_iou}), coverage {med_cov:.2f} (>= {args.min_cov}), depth "
-                                         f"{'n/a' if med_d is None else f'{med_d:.1f} cm'}; mesh from episode "
-                                         f"{oc['source_episode']} ({oc['source_candidate']}), x{oc['rel_scale']:.2f}. "
-                                         f"Green = SAM2 mask, blue = fitted model; right = textured render",
-                               fill=(120, 255, 120) if accepted else (255, 90, 90))
+    sheet = Image.new("RGB", (720 * cols, 410 * rows + 80), (0, 0, 0))
+    ImageDraw.Draw(sheet).text((10, 8), f"{ep} - FINAL model validation on held-out clear frames - "
+                                        f"{'ACCEPTED' if accepted else 'REJECTED'}: median IoU {med_iou:.2f} "
+                                        f"(>= {args.min_iou}), coverage {med_cov:.2f} (>= {args.min_cov}), depth "
+                                        f"{'n/a' if med_d is None else f'{med_d:.1f} cm'}",
+                               fill=(120, 255, 120) if accepted else (255, 90, 90), font=font)
+    ImageDraw.Draw(sheet).text((10, 44), f"mesh from episode {oc['source_episode']} ({oc['source_candidate']}), size "
+                                         f"x{oc['rel_scale']:.2f}. Green = SAM2 mask, blue = fitted model; right = "
+                                         f"textured render", fill=(200, 200, 200), font=small)
     for i, t in enumerate(tiles):
-        sheet.paste(t, ((i % cols) * 720, 60 + (i // cols) * 410))
+        sheet.paste(t, ((i % cols) * 720, 80 + (i // cols) * 410))
     os.makedirs(os.path.dirname(os.path.abspath(args.sheet)), exist_ok=True)
     sheet.save(args.sheet)
 
-    json.dump({"episode": args.episode, "mesh": mesh_path, "mesh_source": oc, "accepted": accepted,
+    # the final acceptance summary of THIS exported mesh (sha1 binds it to the file stage 6 will track)
+    import hashlib
+    json.dump({"episode": args.episode, "mesh": mesh_path,
+               "mesh_sha1": hashlib.sha1(open(mesh_path, "rb").read()).hexdigest(),
+               "extent_m": oc.get("extent_m"), "rel_scale": oc.get("rel_scale"), "mesh_source": oc, "accepted": accepted,
                "median_iou": med_iou, "median_coverage": med_cov, "median_depth_cm": med_d,
                "thresholds": {"min_iou": args.min_iou, "min_cov": args.min_cov},
                "frames": [{k: v for k, v in p.items() if not k.startswith("_")} for p in per],
