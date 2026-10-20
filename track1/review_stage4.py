@@ -36,13 +36,17 @@ import sys
 import cv2
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.patches  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import paths  # noqa: E402
+import mask_quality as mq  # noqa: E402
 from select_object import box_iou  # noqa: E402
+
+REVIEW_VERSION = 2          # bump when checks change: older checks.json files are recomputed
 
 PRIORS = json.load(open(paths.PRIORS))
 META = str(paths.META)
@@ -59,6 +63,168 @@ def point_box_gap(p, b) -> float:
     dx = max(b[0] - p[0], p[0] - b[2], 0.0)
     dy = max(b[1] - p[1], p[1] - b[3], 0.0)
     return float(np.hypot(dx, dy))
+
+
+def _read_mask(path):
+    m = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    return (m > 0) if m is not None else None
+
+
+def quality_views(W: str, meta: dict, review_dir: str, kp: np.ndarray, boxes: np.ndarray) -> tuple[list, dict]:
+    """Sheets + video from masks_quality.json (stage4_prompts.py --mode assess). Returns (checks, files)."""
+    qp = os.path.join(W, "masks_quality.json")
+    if not os.path.exists(qp):
+        return [{"check": "mask quality", "status": "WARN", "detail": "no masks_quality.json (older stage 4 run)"}], {}
+    q = json.load(open(qp))
+    ep, off = f"episode_{meta['episode']:06d}", meta["frame_offset"]
+    fr = q["frames"]
+    vfs = sorted(int(k) for k in fr)
+    st = [fr[str(v)]["status"] for v in vfs]
+    sp = json.load(open(paths.DATA / "submission" / "scored_spans.json"))[str(meta["episode"])]
+    scored = np.asarray(sp["frames"])
+    cnt, nsc = q["status_counts_scored"], max(q["scored_frames"], 1)
+    files = {}
+    checks = []
+    def add(name, good, detail, level="WARN"):
+        checks.append({"check": name, "status": "PASS" if good else level, "detail": detail})
+    add("masks accepted", q["accepted"],
+        f"lost/rejected {100 * q['lost_share']:.1f}% of scored frames (limit {100 * q['max_lost']:.0f}%); unresolved gaps "
+        f"{len(q['unresolved_gaps_scored'])}, longest {q['longest_gap']} frames "
+        + ", ".join(f"{g['video_first']}-{g['video_last']}" for g in q["unresolved_gaps_scored"][:5]), "FAIL")
+    add("status on scored frames", (cnt["suspicious"] + cnt["leak"]) / nsc <= 0.05 and cnt["low_conf"] / nsc <= 0.15,
+        ", ".join(f"{k} {v} ({100 * v / nsc:.0f}%)" for k, v in cnt.items() if v))
+    hid = cnt["hidden"]
+    add("hidden by the actor", True, f"{hid} scored frames empty because the body covers the object (not counted as lost)")
+
+    # ---- timeline
+    series = [("area", "mask area (px)"), ("prob", "SAM2 mean probability inside the mask"),
+              ("fb_iou", "backward/forward pass agreement (IoU)"), ("uncertain", "uncertain outline (share 0.3-0.7)"),
+              ("wrist_cm", "nearest wrist to the mask (cm)"), ("body_cover", "share of the actor's body covered by the mask"),
+              ("dz_m", "mask depth - actor depth (m)"), ("de", "colour distance to the prompt frames (Lab)")]
+    fig, axs = plt.subplots(len(series) + 1, 1, figsize=(22, 2.3 * (len(series) + 1)), sharex=True)
+    ax = axs[0]
+    for v, s in zip(vfs, st):
+        ax.axvspan(v - 0.5, v + 0.5, color=mq.COLOURS[s], lw=0)
+    for r in np.split(scored, np.flatnonzero(np.diff(scored) != 1) + 1):
+        ax.plot([r[0], r[-1]], [1.08, 1.08], color="k", lw=4, clip_on=False)
+    ax.set_ylim(0, 1); ax.set_yticks([])
+    ax.legend(handles=[matplotlib.patches.Patch(color=mq.COLOURS[k], label=f"{k} ({sum(x == k for x in st)})")
+                       for k in mq.ORDER if k in st], ncol=7, loc="lower center", fontsize=10, bbox_to_anchor=(0.5, -0.05))
+    ax.set_title("per-frame mask status (black bars above = scored stretches)", fontsize=12)
+    thr = {"prob": mq.PROB_MIN, "fb_iou": mq.FB_MIN, "uncertain": mq.UNC_MAX, "wrist_cm": mq.WRIST_CM,
+           "body_cover": mq.LEAK_BODY, "de": mq.DE}
+    for ax, (k, title) in zip(axs[1:], series):
+        y = np.array([fr[str(v)].get(k) if fr[str(v)].get(k) is not None else np.nan for v in vfs], float)
+        ax.plot(vfs, y, color="tab:blue", lw=1.1)
+        bad = np.array([s not in ("ok",) for s in st])
+        ax.plot(np.array(vfs)[bad], y[bad], ".", color="tab:red", ms=3)
+        if k in thr:
+            ax.axhline(thr[k], color="tab:red", ls="--", lw=0.8)
+        if k == "dz_m":
+            ax.axhspan(-mq.DZ_M, mq.DZ_M, color="tab:green", alpha=0.08)
+        ax.set_title(title + "  (red dots = frames not 'ok'; dashed = limit)", fontsize=11); ax.grid(alpha=0.3)
+    axs[-1].set_xlabel("video frame")
+    fig.suptitle(f"{ep} — stage 4 mask quality over the contact span", fontsize=15)
+    fig.tight_layout()
+    files["timeline"] = f"{ep}_mask_quality.png"
+    fig.savefig(os.path.join(review_dir, files["timeline"]), dpi=50); plt.close(fig)
+
+    # ---- worst frames: probability heat-map + final (cyan) / backward (magenta) / forward (yellow) outlines
+    prio = {"lost": 0, "rejected": 0, "suspicious": 1, "leak": 1, "low_conf": 2, "hidden": 3, "ok": 4}
+    def badness(v):
+        r = fr[str(v)]
+        return (prio[r["status"]], r.get("prob") if r.get("prob") is not None else 0,
+                r.get("fb_iou") if r.get("fb_iou") is not None else 1)
+    cand = [v for v in sorted(vfs, key=badness) if fr[str(v)]["status"] != "ok"]
+    picked = []
+    for v in cand:                                   # spread them out: at least 5 frames apart
+        if all(abs(v - p) >= 5 for p in picked):
+            picked.append(v)
+        if len(picked) == 8:
+            break
+    if picked:
+        fig, axs = plt.subplots(2, 4, figsize=(24, 12))
+        for ax in axs.flat:
+            ax.axis("off")
+        for ax, v in zip(axs.flat, picked):
+            l = v - off
+            img = cv2.cvtColor(cv2.imread(os.path.join(W, "frames", f"{l:06d}.png")), cv2.COLOR_BGR2RGB)
+            pr = cv2.imread(os.path.join(W, "masks_prob", "1", f"{l:06d}.png"), cv2.IMREAD_GRAYSCALE)
+            if pr is not None:
+                heat = cv2.applyColorMap(pr, cv2.COLORMAP_JET)[..., ::-1]
+                a = (pr.astype(np.float32) / 255 * 0.6)[..., None]
+                img = (img * (1 - a) + heat * a).astype(np.uint8)
+            for sub, col in (("masks_pass/bwd", (255, 0, 255)), ("masks_pass/fwd", (255, 230, 0)), ("masks/1", (0, 255, 255))):
+                m = _read_mask(os.path.join(W, sub, f"{l:06d}.png"))
+                if m is not None and m.any():
+                    cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    cv2.drawContours(img, cnts, -1, col, 3)
+            for idx, col in ((R_WRIST, (255, 40, 40)), (L_WRIST, (40, 220, 40))):
+                cv2.circle(img, tuple(np.round(kp[l, idx]).astype(int)), 8, col, -1)
+            pb = boxes[l]; ph = pb[3] - pb[1]
+            x0, x1 = int(max(0, pb[0] - 0.8 * ph)), int(min(img.shape[1], pb[2] + 0.8 * ph))
+            y0, y1 = int(max(0, pb[1] - 0.3 * ph)), int(min(img.shape[0], pb[3] + 0.2 * ph))
+            ax.imshow(img[y0:y1, x0:x1])
+            r = fr[str(v)]
+            ax.set_title(f"video frame {v}: {r['status'].upper()}\n" + "; ".join(r.get("reasons", []))[:110],
+                         fontsize=10, color="red" if r["status"] in ("lost", "suspicious", "leak", "rejected") else "black")
+        fig.suptitle(f"{ep} — worst mask frames: heat = SAM2 probability; outline cyan = final mask, magenta = backward "
+                     f"pass, yellow = forward pass; dots = wrists (R red, L green)", fontsize=14)
+        fig.tight_layout()
+        files["worst"] = f"{ep}_mask_worst.png"
+        fig.savefig(os.path.join(review_dir, files["worst"]), dpi=50); plt.close(fig)
+
+    # ---- masks over time: 24 frames across the contact span, coloured by status
+    pick = [vfs[int(round(i))] for i in np.linspace(0, len(vfs) - 1, 24)]
+    fig, axs = plt.subplots(4, 6, figsize=(30, 17))
+    for ax, v in zip(axs.flat, pick):
+        l = v - off
+        img = cv2.cvtColor(cv2.imread(os.path.join(W, "frames", f"{l:06d}.png")), cv2.COLOR_BGR2RGB)
+        m = _read_mask(os.path.join(W, "masks", "1", f"{l:06d}.png"))
+        col = np.array(mq.COLOURS[fr[str(v)]["status"]]) * 255
+        if m is not None and m.any():
+            img[m] = (0.4 * img[m] + 0.6 * col).astype(np.uint8)
+        pb = boxes[l]; ph = pb[3] - pb[1]
+        x0, x1 = int(max(0, pb[0] - 0.8 * ph)), int(min(img.shape[1], pb[2] + 0.8 * ph))
+        y0, y1 = int(max(0, pb[1] - 0.3 * ph)), int(min(img.shape[0], pb[3] + 0.2 * ph))
+        ax.imshow(img[y0:y1, x0:x1]); ax.axis("off")
+        ax.set_title(f"{v}: {fr[str(v)]['status']}{' (scored)' if v in set(scored) else ''}", fontsize=12,
+                     color=mq.COLOURS[fr[str(v)]["status"]])
+    fig.suptitle(f"{ep} — object mask over time (colour = status)", fontsize=16)
+    fig.tight_layout()
+    files["grid"] = f"{ep}_mask_grid.png"
+    fig.savefig(os.path.join(review_dir, files["grid"]), dpi=45); plt.close(fig)
+
+    # ---- video: every frame, half resolution, mask coloured by status, status + probability written on it.
+    # Only for episodes with real problems (> 5 % of scored frames lost / rejected / suspicious / leak) or when
+    # MASK_VIDEO=1 is set: a video per episode costs ~1 min and ~20 MB.
+    problems = (cnt["lost"] + cnt["rejected"] + cnt["suspicious"] + cnt["leak"]) / nsc
+    if problems <= 0.05 and os.environ.get("MASK_VIDEO") != "1":
+        return checks, files
+    import subprocess
+    H, Wd = cv2.imread(os.path.join(W, "frames", "000000.png")).shape[:2]
+    h2, w2 = H // 2 // 2 * 2, Wd // 2 // 2 * 2
+    files["video"] = f"{ep}_mask.mp4"
+    proc = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w2}x{h2}",
+                             "-r", "30", "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "26",
+                             os.path.join(review_dir, files["video"])], stdin=subprocess.PIPE)
+    for l in range(meta["n_frames"]):
+        img = cv2.resize(cv2.imread(os.path.join(W, "frames", f"{l:06d}.png")), (w2, h2))
+        v = l + off
+        r = fr.get(str(v))
+        stt = r["status"] if r else "outside contact span"
+        m = _read_mask(os.path.join(W, "masks", "1", f"{l:06d}.png"))
+        if m is not None and m.any():
+            m = cv2.resize(m.astype(np.uint8), (w2, h2), interpolation=cv2.INTER_NEAREST) > 0
+            col = (np.array(mq.COLOURS.get(stt, (0.2, 0.6, 1.0))) * 255)[::-1]
+            img[m] = (0.45 * img[m] + 0.55 * col).astype(np.uint8)
+        txt = f"video {v}  {stt}" + (f"  p={r['prob']:.2f}" if r and r.get("prob") is not None else "") + \
+              (f"  fb={r['fb_iou']:.2f}" if r and r.get("fb_iou") is not None else "") + ("  SCORED" if v in set(scored) else "")
+        cv2.putText(img, txt, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 4)
+        cv2.putText(img, txt, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        proc.stdin.write(img.tobytes())
+    proc.stdin.close(); proc.wait()
+    return checks, files
 
 
 def review_episode(W: str, review_dir: str) -> dict:
@@ -156,6 +322,9 @@ def review_episode(W: str, review_dir: str) -> dict:
         checks.append({"check": "SAM2 prompts", "status": "PASS",
                        "detail": f"{len(pl)} boxes ({sum(p['source'] != 'stage3' for p in pl)} gap-fill) with "
                                  f"{sum(len(p.get('neg', [])) for p in pl)} negative body points"})
+    os.makedirs(review_dir, exist_ok=True)
+    qc, qfiles = quality_views(W, meta, review_dir, kp, boxes)
+    checks += qc
     status = "FAIL" if any(c["status"] == "FAIL" for c in checks) else \
              "WARN" if any(c["status"] == "WARN" for c in checks) else "PASS"
 
@@ -228,7 +397,8 @@ def review_episode(W: str, review_dir: str) -> dict:
     sheet = os.path.join(review_dir, f"{ep}_mask.png")
     fig.savefig(sheet, dpi=50)
     plt.close(fig)
-    return {"episode": e, "status": status, "checks": checks, "sheet": os.path.basename(sheet)}
+    return {"episode": e, "status": status, "checks": checks, "sheet": os.path.basename(sheet),
+            "quality_files": qfiles, "version": REVIEW_VERSION}
 
 
 def main() -> None:
@@ -249,9 +419,12 @@ def main() -> None:
                             "detail": "missing (see the episode log)"}]})
             continue
         chk_path = os.path.join(args.stage_dir, f"episode_{e:06d}.checks.json")
-        key_out = os.path.join(W, "masks_seed.json")
+        key_out = os.path.join(W, "masks_quality.json")       # written last by stage 4 (after repair)
+        if not os.path.exists(key_out):
+            key_out = os.path.join(W, "masks_seed.json")
         reuse_ok = (os.path.exists(chk_path) and os.path.exists(key_out)
                     and os.path.getmtime(chk_path) > os.path.getmtime(key_out)
+                    and json.load(open(chk_path)).get("version") == REVIEW_VERSION
                     and os.path.exists(os.path.join(review, json.load(open(chk_path)).get("sheet", "-"))))
         if reuse_ok:                      # sheet already up to date: reuse it
             results.append(json.load(open(chk_path)))
@@ -265,6 +438,11 @@ def main() -> None:
     out = ["<html><head><meta charset='utf-8'><title>Stage 4 object mask</title><style>body{font-family:"
            "sans-serif;background:#111;color:#eee} td,th{border:1px solid #444;padding:3px 7px} table{border-"
            "collapse:collapse} img{max-width:100%}</style></head><body><h1>Stage 4 — object mask (SAM2)</h1>"
+           "<p>Status colours: <b style='color:#3b3'>ok</b>, <b style='color:#f2cc1a'>low confidence</b> (SAM2 unsure, "
+           "passes disagree, fuzzy outline), <b style='color:#f70'>suspicious</b> (wrong size / depth / colour, or far "
+           "from the hands during contact), <b style='color:#c3c'>leak</b> (onto the body, or area spike), "
+           "<b style='color:#999'>hidden</b> (empty because the body covers it), <b style='color:#e22'>lost</b> "
+           "(empty otherwise), <b style='color:#622'>rejected</b> (emptied by the repair).</p>"
            "<p>Check: green covers the whole object and nothing else, on every shown frame (red titles = the most "
            "suspicious frames). Plots: area should not drop to 0 while the object is visible; size stays in the "
            "band; depth stays near the actor.</p><table><tr><th>episode</th><th>status</th><th>checks</th></tr>"]
@@ -283,6 +461,13 @@ def main() -> None:
                 os.path.getmtime(os.path.join(args.stage_dir, "review", r["sheet"]))))
             out.append(f"<p style='color:#999'>sheet made at {made}</p>")
             out.append(f"<a href='review/{r['sheet']}'><img src='review/{r['sheet']}'></a>")
+            qf = r.get("quality_files", {})
+            if qf.get("video"):
+                out.append(f"<p><a href='review/{qf['video']}'>▶ mask video (every frame, colour = status)</a></p>"
+                           f"<video src='review/{qf['video']}' controls width='960'></video>")
+            for k in ("timeline", "worst", "grid"):
+                if qf.get(k):
+                    out.append(f"<a href='review/{qf[k]}'><img src='review/{qf[k]}'></a>")
     out.append("</body></html>")
     open(os.path.join(args.stage_dir, "index.html"), "w", encoding="utf-8").write("\n".join(out))
     print(f"wrote {os.path.join(args.stage_dir, 'index.html')}")

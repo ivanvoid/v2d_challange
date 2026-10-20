@@ -2,7 +2,8 @@
 """Stage 4 — object mask: SAM2 propagates the stage-3 seed box through every frame.
 
 Input:  out/episode_XXXXXX/object_track.json (seed frame + box), frames/
-Output: out/episode_XXXXXX/masks/1/<frame:06d>.png (one per local frame), sam2_prompts.json
+Output: out/episode_XXXXXX/masks/1/<frame:06d>.png (one per local frame), sam2_prompts.json, and from
+        sam2_box_neg.py: masks_prob/ (soft masks), masks_pass/{bwd,fwd}/ (each pass), masks_conf.json
 
 SAM2 gets one box prompt on EACH stage-3 frame where the object was found: the largest accepted
 detection that contains that frame's best box (whole object, not a part of it).
@@ -105,6 +106,10 @@ def main() -> None:
     if os.path.isdir(masks_dir):
         log(f"{ep}: removing old masks ({have} frames, seed {'changed' if old_seed != seed else 'same'})")
         shutil.rmtree(masks_dir)
+    for extra in (masks_dir + "_prob", masks_dir + "_pass"):      # soft masks / per-pass masks of an older run
+        shutil.rmtree(extra, ignore_errors=True)
+    if os.path.exists(masks_dir + "_conf.json"):
+        os.remove(masks_dir + "_conf.json")
 
     log(f"{ep}: SAM2 with {len(plist)} box prompts, {n} frames, backward + forward")
     for p in plist:

@@ -44,7 +44,7 @@ PY_FP=/opt/venvs/foundation_pose/bin/python
 PY_RENDER=/opt/venvs/wilor/bin/python
 SUB="$BASEPATH/submission"
 
-stage4_mask() {  # $1 = episode: prompts (boxes + negative body points) -> SAM2 -> gap fill -> SAM2 -> leak repair
+stage4_mask() {  # $1 = episode: prompts -> SAM2 -> (re-detect -> SAM2) x <= 2 -> leak repair -> assess
     local N="$1" EP PLOG DLOG rc
     EP="$(printf 'episode_%06d' "$N")"; PLOG="$SDIR/$EP.log"; DLOG="$SDIR/$EP.debug.log"
     p4() { "$PY_REVIEW" "$T1/stage4_prompts.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" --mode "$1" \
@@ -53,9 +53,13 @@ stage4_mask() {  # $1 = episode: prompts (boxes + negative body points) -> SAM2 
                --debug_log "$DLOG" 2>&1 | tee -a "$PLOG"; return ${PIPESTATUS[0]}; }
     p4 init || return 1
     sam || return 1
-    p4 fill; rc=$?
-    if [[ $rc -eq 10 ]]; then sam || return 1; elif [[ $rc -ne 0 ]]; then return 1; fi
+    local round
+    for round in 1 2; do                     # recovery: re-detect on suspicious / lost stretches, at most twice
+        p4 fill; rc=$?
+        if [[ $rc -eq 10 ]]; then sam || return 1; elif [[ $rc -ne 0 ]]; then return 1; else break; fi
+    done
     p4 repair || return 1
+    p4 assess || return 1                    # final per-frame status; exit 3 = too many scored frames lost
 }
 
 stage8_final() {  # $1 = episode index: scale match -> build -> QA -> result frames
@@ -232,7 +236,14 @@ print(' '.join(str(m['episode_index']) for m in meta if m['object'] == '$O'))")"
             --weights "$WEIGHTS" --stage_dir "$SDIR" 2>> "$SDIR/$O.debug.log" | tee -a "$SDIR/$O.log"
         rc=${PIPESTATUS[0]}
         if [[ $rc -eq 0 ]]; then
-            for V in $VIDS; do $STAMPS write --episode "$V" --stage 5e || rc=1; done
+            for V in $VIDS; do               # validate the exact final model per video; stamp only accepted ones
+                VE="$(printf 'episode_%06d' "$V")"
+                CUDA_VISIBLE_DEVICES="$GPU" "$PY_FP" "$T1/stage5_validate.py" --episode "$V" --out_root "$OUT" \
+                    --weights "$WEIGHTS" --debug_log "$SDIR/$O.debug.log" --sheet "$SDIR/review/${VE}_validate.png" \
+                    2>> "$SDIR/$O.debug.log" | tee -a "$SDIR/$O.log"
+                if [[ ${PIPESTATUS[0]} -eq 0 ]]; then $STAMPS write --episode "$V" --stage 5e || rc=1
+                else rc=3; echo "[$(date +%T)] $O: episode $V final model REJECTED (see ${VE}_validate.png)" | tee -a "$SDIR/$O.log"; fi
+            done
         fi
         if [[ $rc -ne 0 ]]; then N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $O FAILED (exit $rc) after $((SECONDS - t))s"
         else echo "[$(date +%T)] $O finished in $((SECONDS - t))s"; fi

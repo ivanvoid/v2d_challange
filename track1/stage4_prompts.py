@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Stage 4 helpers: build SAM2 prompts, fill gaps after a first SAM2 pass, repair transient leaks.
+"""Stage 4 helpers: build SAM2 prompts, fill gaps after a SAM2 pass, repair transient leaks, assess.
 
   --mode init    prompts from stage 3: the (whole-object) box on each stage-3 frame whose metric size
                  agrees with the others (within x1.5 of their median), plus NEGATIVE points on the
-                 actor's body (SAM3D-Body 2D keypoints: nose, shoulders, elbows, hips, knees, ankles,
-                 mid upper arm, mid forearm) that lie outside the box (+margin) — so SAM2 does not
-                 grow into the arm / legs / torso of the person holding the object.
+                 actor: points spread over the actor's person mask (stage 2) and the SAM3D-Body 2D
+                 keypoints (nose, shoulders, elbows, hips, knees, ankles, mid upper arm, mid forearm),
+                 all outside the box (+margin) — so SAM2 does not grow into the person holding the object.
                  -> out/<ep>/mask_prompts.json
-  --mode fill    after SAM2: per scored frame measure mask area, metric size, depth vs the actor,
-                 and colour (median Lab inside the mask vs the colour on the prompt frames). Bad
-                 frames (empty, < 0.4 x median area, size outside the prior, > 0.6 m from the actor,
-                 colour Delta-E > --max_de) are grouped into stretches; on frames in each stretch the
-                 object is re-detected (Grounding DINO on the image, its mirror and zooms on the hands;
-                 same gates as stage 3 + size within x1.6 of the stage-3 size) and good boxes are added
-                 as prompts. Exit code 10 = prompts changed (rerun SAM2), 0 = nothing to add.
+  --mode fill    after SAM2: every frame of the contact span gets a status (mask_quality.py: ok /
+                 low_conf / suspicious / leak / hidden / lost). Suspicious and lost frames are grouped into
+                 stretches (>= --min_stretch frames); on frames in each stretch the object is re-detected
+                 (Grounding DINO on the image, its mirror and zooms on the hands) and a box is added as a
+                 prompt only if it passes the stage-3 gates, is within x1.6 of the typical size, is within
+                 0.15 actor heights of a wrist (contact span: the hand touches the object), and is not the
+                 actor (< 50 % of the box on the person mask). Exit code 10 = prompts changed (rerun SAM2).
   --mode repair  transient leaks: a frame whose mask area spikes > 1.6 x the local median (+-7
                  frames) is cut to the dilated union of its good neighbours; a small mask far from
-                 where the object is (e.g. a shoe) is cleared. Raw SAM2 masks kept in masks_raw/1.
-                 -> out/<ep>/masks_repair.json
+                 where the object is (e.g. a shoe) is REJECTED (emptied, with the reason recorded).
+                 Raw SAM2 masks kept in masks_raw/1. -> out/<ep>/masks_repair.json
+  --mode assess  final status of every contact-span frame after recovery and repair ->
+                 out/<ep>/masks_quality.json (per frame: status, reasons, measurements; unresolved
+                 lost/rejected stretches on scored frames, longest one). Exit code 3 (acceptance failed)
+                 if more than --max_lost of the scored frames are lost or rejected.
 
 Run with the sam3d_body venv.
 """
@@ -41,6 +45,7 @@ from select_object import box_iou, cache_name, gdino_batch, load_dets, rect_gap 
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import paths  # noqa: E402
+import mask_quality as mq  # noqa: E402
 PRIORS = json.load(open(paths.PRIORS))
 META = str(paths.META)
 NEG_KP = (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)           # mhr70: nose, shoulders, elbows, hips, knees, ankles
@@ -86,6 +91,16 @@ class Ctx:
                                            weights_only=False)["bbox_track"], float)
         self.kp = torch.load(os.path.join(W, "body", "mhr_params.pt"), map_location="cpu",
                              weights_only=False)["pred_keypoints_2d"].numpy()
+        sp = json.load(open(paths.DATA / "submission" / "scored_spans.json"))[str(self.meta["episode"])]
+        self.scored = set(int(f) - self.off for f in sp["frames"])
+        self._pm = {}
+
+    def person(self, f):
+        """The actor's person mask (stage 2), or None."""
+        if f not in self._pm:
+            m = cv2.imread(os.path.join(self.W, "body", "person_masks", f"{f:06d}.png"), cv2.IMREAD_GRAYSCALE)
+            self._pm[f] = (m > 0) if m is not None else None
+        return self._pm[f]
 
     def ph(self, f):
         b = self.boxes[f]
@@ -104,6 +119,23 @@ class Ctx:
                 (k[L_EL] + k[L_WRIST]) / 2, (k[R_EL] + k[R_WRIST]) / 2]      # mid forearms
         m = max(0.15 * max(box["x1"] - box["x0"], box["y1"] - box["y0"]), 0.06 * self.ph(f))
         H, Wd = self.hw
+        pm = self.person(f)
+        if pm is not None:                       # points spread over the actor's body (farthest-point sampling)
+            core = cv2.erode(pm.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+            ys, xs = np.nonzero(core[::4, ::4])
+            cand = np.stack([xs * 4, ys * 4], 1).astype(float)
+            keep = ~((cand[:, 0] >= box["x0"] - m) & (cand[:, 0] <= box["x1"] + m)
+                     & (cand[:, 1] >= box["y0"] - m) & (cand[:, 1] <= box["y1"] + m))
+            cand = cand[keep]
+            if len(cand):
+                chosen = [cand[len(cand) // 2]]
+                d = np.linalg.norm(cand - chosen[0], axis=1)
+                for _ in range(11):
+                    i = int(np.argmax(d))
+                    if d[i] < 0.05 * self.ph(f):
+                        break
+                    chosen.append(cand[i]); d = np.minimum(d, np.linalg.norm(cand - cand[i], axis=1))
+                pts = pts + [np.asarray(c) for c in chosen]
         out = []
         for p in pts:
             x, y = float(p[0]), float(p[1])
@@ -152,7 +184,10 @@ def colour_lab(rgb, m):
 
 
 def frame_stats(c: Ctx, W: str, prompts: list[dict], sub="masks"):
-    """Per scored frame: area, size, dz, colour distance to the prompt-frame colour."""
+    """Per contact-span frame: area, size, dz, colour distance to the prompt-frame colour, distance from the
+    nearest wrist (cm at the actor's depth), share of the mask on the actor's person mask, SAM2 confidence."""
+    conf_path = os.path.join(W, "masks_conf.json")
+    conf = json.load(open(conf_path))["frames"] if os.path.exists(conf_path) else {}
     ref_cols = []
     for p in prompts:
         m = mask(W, p["frame"], sub)
@@ -166,18 +201,58 @@ def frame_stats(c: Ctx, W: str, prompts: list[dict], sub="masks"):
     for f in range(c.first, c.last + 1):
         m = mask(W, f, sub)
         r = {"area": int(m.sum()) if m is not None else 0}
+        cf = conf.get(str(f), {})
+        r.update({k: cf.get(k) for k in ("prob", "uncertain", "fb_iou")})
         if r["area"] > 0:
             ys, xs = np.nonzero(m)
             d = depth_map(W, f)
-            oz = float(np.median(d[m]))
+            oz = float(np.percentile(d[m], 20))      # nearest 20 %: wall depth bleeds into thin / edge-on objects
+            az = c.actor_depth(f, d)
             r["size_m"] = max(np.ptp(xs), np.ptp(ys)) * oz / c.fx
-            r["dz_m"] = oz - c.actor_depth(f, d)
+            r["dz_m"] = oz - az
             r["centroid"] = [float(xs.mean()), float(ys.mean())]
+            dt = cv2.distanceTransform((~m).astype(np.uint8), cv2.DIST_L2, 3)
+            H, Wd = m.shape
+            px = [dt[int(min(H - 1, max(0, k[1]))), int(min(Wd - 1, max(0, k[0])))]
+                  for k in (c.kp[f][R_WRIST], c.kp[f][L_WRIST])]
+            r["wrist_cm"] = float(min(px) * az / c.fx * 100)
+            pm = c.person(f)
+            r["person_frac"] = float((m & pm).sum() / r["area"]) if pm is not None else None
+            r["body_cover"] = float((m & pm).sum() / max(pm.sum(), 1)) if pm is not None else None
             if ref_col is not None:
                 rgb = np.asarray(Image.open(os.path.join(W, "frames", f"{f:06d}.png")).convert("RGB"))
                 col = colour_lab(rgb, m)
                 r["de"] = float(np.linalg.norm(col - ref_col)) if col is not None else None
         rows[f] = r
+    return rows
+
+
+def assign_status(c: Ctx, rows: dict, rejected: dict | None = None) -> dict:
+    """Status of every contact-span frame (mask_quality.classify). An empty mask is 'hidden' when the
+    actor's (dilated) person mask covers where the object should be: its centroid interpolated between the
+    nearest frames that still have a mask; otherwise 'lost'."""
+    frames = sorted(rows)
+    areas = np.array([rows[f]["area"] for f in frames], float)
+    sizes = [rows[f]["size_m"] for f in frames if rows[f].get("size_m")]
+    typical = float(np.median(sizes)) if sizes else c.track.get("ref_size_m")   # the episode's own mask size
+    have = [f for f in frames if rows[f]["area"] > 0]
+    for i, f in enumerate(frames):
+        r = rows[f]
+        if rejected and f in rejected:
+            r["rejected"] = rejected[f]
+        if r["area"] == 0 and have:
+            a = [g for g in have if g < f]; b = [g for g in have if g > f]
+            if a and b:
+                ca, cb = np.array(rows[a[-1]]["centroid"]), np.array(rows[b[0]]["centroid"])
+                w = (f - a[-1]) / (b[0] - a[-1]); cen = (1 - w) * ca + w * cb
+            else:
+                cen = np.array(rows[(a or b)[-1 if a else 0]]["centroid"])
+            pm = c.person(f)
+            if pm is not None:
+                pm = cv2.dilate(pm.astype(np.uint8), np.ones((31, 31), np.uint8)) > 0
+                y, x = int(min(pm.shape[0] - 1, max(0, cen[1]))), int(min(pm.shape[1] - 1, max(0, cen[0])))
+                r["hidden_hint"] = bool(pm[y, x])
+        r["status"], r["reasons"] = mq.classify(r, typical, mq.local_median_area(areas, i), True)
     return rows
 
 
@@ -222,8 +297,14 @@ def detect_on(c: Ctx, W: str, frames: list[int], prompts_txt: list[str], gd: str
                 for det in load_dets(cache_name(os.path.join(W, "masks_fill", "dino", name), r, f), 0.25):
                     b = back(det["box"])
                     m = c.measure(b, f, d)
+                    pm = c.person(f)
+                    on_person = 0.0
+                    if pm is not None:
+                        x0, y0, x1, y1 = (int(max(0, b["x0"])), int(max(0, b["y0"])), int(b["x1"]), int(b["y1"]))
+                        on_person = float(pm[y0:y1, x0:x1].mean()) if y1 > y0 and x1 > x0 else 1.0
                     ok = (m["gap"] <= 0.1 and abs(m["dz_m"]) <= 0.6 and c.size_lo <= m["size_m"] <= c.size_hi
-                          and m["actor_iou"] <= 0.6 and (ref is None or ref / 1.6 <= m["size_m"] <= ref * 1.6))
+                          and m["actor_iou"] <= 0.6 and (ref is None or ref / 1.6 <= m["size_m"] <= ref * 1.6)
+                          and m["wrist_gap"] <= 0.15 and on_person < 0.5)    # contact span: the hand touches it
                     if not ok:
                         continue
                     score = float(det["confidence"]) * math.exp(-m["wrist_gap"] / 0.25)
@@ -238,9 +319,12 @@ def main() -> None:
     ap.add_argument("--episode", type=int, required=True)
     ap.add_argument("--out_root", required=True)
     ap.add_argument("--weights", required=True)
-    ap.add_argument("--mode", choices=("init", "fill", "repair"), required=True)
+    ap.add_argument("--mode", choices=("init", "fill", "repair", "assess"), required=True)
     ap.add_argument("--max_de", type=float, default=30.0, help="max colour distance (Lab) to the prompt frames")
     ap.add_argument("--max_new", type=int, default=8)
+    ap.add_argument("--min_stretch", type=int, default=3, help="re-detect in stretches of >= this many bad frames")
+    ap.add_argument("--max_lost", type=float, default=0.25,
+                    help="assess: fail if more than this share of scored frames is lost or rejected")
     args = ap.parse_args()
     ep = f"episode_{args.episode:06d}"
     W = os.path.join(os.path.abspath(args.out_root), ep)
@@ -261,25 +345,12 @@ def main() -> None:
         return
 
     prompts = json.load(open(ppath))["prompts"]
+    if args.mode == "assess":
+        assess(c, W, ep, prompts, args.max_lost)
+        return
     if args.mode == "fill":
-        rows = frame_stats(c, W, prompts)
-        areas = np.array([r["area"] for r in rows.values()], float)
-        med = float(np.median(areas[areas > 0])) if (areas > 0).any() else 1.0
-        bad = []
-        for f, r in rows.items():
-            why = None
-            if r["area"] == 0:
-                why = "empty"
-            elif r["area"] < 0.4 * med:
-                why = "small"
-            elif not c.size_lo <= r["size_m"] <= c.size_hi:
-                why = "size"
-            elif abs(r["dz_m"]) > 0.6:
-                why = "depth"
-            elif r.get("de") is not None and r["de"] > args.max_de:
-                why = "colour"
-            if why:
-                bad.append((f, why))
+        rows = assign_status(c, frame_stats(c, W, prompts))
+        bad = [(f, r["status"]) for f, r in sorted(rows.items()) if r["status"] in ("suspicious", "lost")]
         stretches, cur = [], []
         for f, why in bad:
             if cur and f - cur[-1][0] > 3:
@@ -287,7 +358,7 @@ def main() -> None:
             cur.append((f, why))
         if cur:
             stretches.append(cur)
-        stretches = [s for s in stretches if len(s) >= 5]
+        stretches = [s for s in stretches if len(s) >= args.min_stretch]
         have = {p["frame"] for p in prompts}
         targets = []
         for s in stretches:
@@ -295,8 +366,8 @@ def main() -> None:
             k = max(1, (f1 - f0) // 30 + 1)
             targets += [int(round(f0 + (f1 - f0) * (i + 0.5) / k)) for i in range(k)]
         targets = [f for f in targets if f not in have]
-        log(f"{ep}: {len(bad)} bad frames ({', '.join(sorted({w for _, w in bad})) or '-'}) in "
-            f"{len(stretches)} stretches >= 5 frames; re-detecting on video frames {[f + c.off for f in targets]}")
+        log(f"{ep}: {len(bad)} suspicious/lost frames in {len(stretches)} stretches >= {args.min_stretch} frames; "
+            f"re-detecting on video frames {[f + c.off for f in targets]}")
         if not targets:
             return
         txt = [c.track["prompt"]] + ([c.prior["prompt"]] if c.prior.get("prompt") and
@@ -329,7 +400,7 @@ def main() -> None:
     ms = [mask(W, f, "masks_raw") for f in range(n)]
     area = np.array([m.sum() if m is not None else 0 for m in ms], float)
     cen = np.array([np.argwhere(m).mean(0)[::-1] if m is not None and m.any() else [np.nan, np.nan] for m in ms])
-    fixed, cleared = [], []
+    fixed, cleared, reasons = [], [], {}
     for f in range(n):
         lo, hi = max(0, f - 7), min(n, f + 8)
         nb = [g for g in range(lo, hi) if g != f and area[g] > 0]
@@ -349,7 +420,9 @@ def main() -> None:
                 if new.sum() < area[f]:
                     ms[f] = new; fixed.append(f)
         elif area[f] < 0.6 * med_a and np.linalg.norm(cen[f] - med_c) > 1.5 * math.sqrt(med_a):
-            ms[f] = np.zeros_like(ms[f]); cleared.append(f)    # small blob far from the object: drop
+            ms[f] = np.zeros_like(ms[f]); cleared.append(f)    # small blob far from the object: rejected
+            reasons[f] = (f"stray blob: {area[f] / med_a:.2f} x the local area, "
+                          f"{np.linalg.norm(cen[f] - med_c) / math.sqrt(med_a):.1f} object-sizes from it")
     for f in fixed + cleared:
         cv2.imwrite(os.path.join(W, "masks", "1", f"{f:06d}.png"), (ms[f] * 255).astype(np.uint8))
     for f in range(n):                                          # restore untouched frames from raw
@@ -358,10 +431,38 @@ def main() -> None:
             dst = os.path.join(W, "masks", "1", f"{f:06d}.png")
             if os.path.exists(src):
                 shutil.copyfile(src, dst)
-    json.dump({"leak_cut_frames": [f + c.off for f in fixed], "cleared_frames": [f + c.off for f in cleared]},
+    json.dump({"leak_cut_frames": [f + c.off for f in fixed], "cleared_frames": [f + c.off for f in cleared],
+               "rejected": {str(f + c.off): reasons[f] for f in cleared}},
               open(rep_path, "w"), indent=1)
     log(f"{ep}: repair — {len(fixed)} leak frames cut {[f + c.off for f in fixed][:12]}, "
-        f"{len(cleared)} stray blobs cleared {[f + c.off for f in cleared][:12]}")
+        f"{len(cleared)} stray blobs rejected {[f + c.off for f in cleared][:12]}")
+    return
+
+
+def assess(c: Ctx, W: str, ep: str, prompts: list[dict], max_lost: float) -> None:
+    rep_path = os.path.join(W, "masks_repair.json")
+    rejected = {int(k) - c.off: v for k, v in json.load(open(rep_path)).get("rejected", {}).items()} \
+        if os.path.exists(rep_path) else {}
+    rows = assign_status(c, frame_stats(c, W, prompts), rejected)
+    sc = sorted(f for f in rows if f in c.scored)
+    count = {k: sum(rows[f]["status"] == k for f in sc) for k in mq.ORDER}
+    gaps = []
+    for a, b in mq.runs([rows[f]["status"] in ("lost", "rejected") for f in sc]):
+        gaps.append({"video_first": sc[a] + c.off, "video_last": sc[b] + c.off, "scored_frames": b - a + 1})
+    lost_share = (count["lost"] + count["rejected"]) / max(len(sc), 1)
+    accepted = lost_share <= max_lost
+    json.dump({"episode": c.meta["episode"], "scored_frames": len(sc), "status_counts_scored": count,
+               "unresolved_gaps_scored": gaps, "longest_gap": max([g["scored_frames"] for g in gaps] or [0]),
+               "lost_share": lost_share, "accepted": accepted, "max_lost": max_lost,
+               "thresholds": {k: getattr(mq, k) for k in ("SIZE", "DZ_M", "DE", "WRIST_CM", "AT_HAND_CM", "COLOUR_OK", "LEAK_BODY", "LEAK_AREA",
+                                                         "PROB_MIN", "FB_MIN", "UNC_MAX")},
+               "frames": {str(f + c.off): {k: v for k, v in r.items()} for f, r in sorted(rows.items())}},
+              open(os.path.join(W, "masks_quality.json"), "w"), indent=1)
+    log(f"{ep}: masks on {len(sc)} scored frames — " + ", ".join(f"{k} {v}" for k, v in count.items() if v)
+        + f"; unresolved gaps {len(gaps)} (longest {max([g['scored_frames'] for g in gaps] or [0])} frames)")
+    if not accepted:
+        log(f"{ep}: ACCEPTANCE FAILED — {100 * lost_share:.0f}% of scored frames lost/rejected (> {100 * max_lost:.0f}%)")
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":

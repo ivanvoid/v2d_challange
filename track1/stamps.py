@@ -52,13 +52,14 @@ STAGES = {
               outputs=["select", "object_track.json", "dino_detections.json", "dino_candidates", "near_frames"]),
     "4": dict(code=["stage4_prompts.py", "stage4_mask.py", "sam2_box_neg.py"], extra=[T1 / "object_priors.json"],
               deps=["1", "2", "3"], inputs=[],
-              outputs=["masks", "masks_raw", "masks_fill", "masks_seed.json", "mask_prompts.json",
-                       "masks_repair.json", "sam2_prompts.json"]),
+              outputs=["masks", "masks_raw", "masks_fill", "masks_prob", "masks_pass", "masks_conf.json",
+                       "masks_seed.json", "mask_prompts.json", "masks_repair.json", "masks_quality.json",
+                       "sam2_prompts.json"]),
     "5": dict(code=["stage5_pick.py", "stage5_mesh.py", "stage5_scale.py", "stage5_check.py", "stage5_refine.py"],
               extra=[T1 / "object_priors.json"], deps=["1", "2", "4"], inputs=[],
               outputs=["mesh", "mesh_scaled.obj", "mesh_scaled_stage5c.obj", "mesh_scaled_stage5d.obj",
                        "material.mtl", "material_0.png"]),
-    "5e": dict(code=["stage5_object.py"], extra=[], deps=["5"], inputs=["OBJECT_VIDEOS"], outputs=[]),
+    "5e": dict(code=["stage5_object.py", "stage5_validate.py"], extra=[], deps=["5"], inputs=["OBJECT_VIDEOS"], outputs=[]),
     "6": dict(code=["stage6_track.py"], extra=[], deps=["1", "2", "4", "5e"], inputs=["OVERRIDES"],
               outputs=["poses", "track/states.json"]),
     "7": dict(code=["stage7_smooth.py"], extra=[], deps=["6"], inputs=[],
@@ -70,7 +71,7 @@ STAGES = {
 }
 # outputs that must exist for a stamp to count (a stamp without its result is stale)
 REQUIRED = {"1": ["depth_scale.json", "floor.json", "background.npz"], "2": ["body/mhr_fit.npz", "body/person_track.json", "body/depth_trend.json"], "3": ["object_track.json"],
-            "4": ["masks_seed.json"], "5": ["mesh/refine.json"], "5e": ["mesh/object_choice.json"],
+            "4": ["masks_seed.json", "masks_quality.json"], "5": ["mesh/refine.json"], "5e": ["mesh/object_choice.json", "mesh/validate.json"],
             "6": ["track/states.json"], "7": ["track/smooth.json"], "8": ["track/scale_match.json"]}
 
 
