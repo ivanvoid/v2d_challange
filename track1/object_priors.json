@@ -9,7 +9,9 @@
    "hula hoop.",
    "plastic hoop.",
    "ring."
-  ]
+  ],
+  "thin": true,
+  "_thin_why": "a thin rim: MoGe gives its pixels the depth of the wall behind, so stage 3 never greys the actor's reach zone for it (the V would hide the hoop the actor holds)"
  },
  "big_red_bowl": {
   "size_m": [

@@ -8,8 +8,12 @@ Per episode (review/episode_XXXXXX_select.png):
           every detection (green thick = chosen, orange = accepted, red = rejected) with an id
   legend  per detection: prompt, confidence, size (m), depth vs actor, gap, wrist gap, verdict
 
-Checks: object found; chosen size inside the prior; object on >= 3 of 5 frames;
-size consistent across frames (max/min <= 1.6); seed close to a wrist (<= 0.15 heights).
+Each sampled frame also shows the final SUPPORT box (thick cyan, with its size) and any box rejected as
+a different object (magenta, size ratio to the typical size).
+
+Checks: object found; chosen size inside the prior; supports on >= half of the sampled frames (FAIL < 2,
+the stage itself fails then); every support within the stage's consistency factor (x1.5) of the typical size;
+seed close to a wrist (<= 0.15 heights); boxes rejected as a different object (info).
 
     /opt/venvs/sam3d_body/bin/python track1/review_stage3.py --episodes 6 8 17 26 28 \
         --out_root out --stage_dir logs/stages/03_select
@@ -27,6 +31,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 YELLOW, CYAN, RED, ORANGE, GREEN, WR, WL = ((255, 220, 0), (0, 230, 230), (235, 50, 50), (255, 165, 0),
                                             (40, 230, 60), (255, 40, 40), (40, 220, 40))
+MAGENTA = (255, 0, 255)
+REVIEW_VERSION = 3          # bump when checks change: older checks.json files are recomputed
+
+
+def num(v, fmt: str) -> str:
+    return "n/a" if v is None else format(v, fmt)
 
 
 def font(size: int):
@@ -45,7 +55,7 @@ def dashed(draw, b, color, step=20):
             draw.line([x, y, x, min(y + step // 2, b["y1"])], fill=color, width=3)
 
 
-def tile_frame(W: str, cand: dict, f: int, chosen: dict | None) -> Image.Image:
+def tile_frame(W: str, cand: dict, f: int, chosen: dict | None, rec: dict | None = None) -> Image.Image:
     a, nf = cand["actor"][str(f)], cand["near"].get(str(f))
     tag = chosen["tag"] if chosen and "tag" in chosen else "near"
     src = os.path.join(W, "select", "near_frames", f"{f:06d}.png") if tag == "near" \
@@ -69,10 +79,29 @@ def tile_frame(W: str, cand: dict, f: int, chosen: dict | None) -> Image.Image:
         d.rectangle([b["x0"], b["y0"], b["x1"], b["y1"]], outline=col, width=7 if is_ch else 3)
         d.text((b["x0"] + 3, b["y0"] + 2), f"#{i}", fill=col, font=font(24))
         verdict = "CHOSEN" if is_ch else ("ok" if c["accepted"] else "; ".join(c["reasons"]))
-        legend.append((col, f"#{i} '{c['prompt']}' conf {c['conf']:.2f} size {c['size_m']:.2f}m"
+        legend.append((col, f"#{i} '{c['prompt']}' conf {c['conf']:.2f} size {num(c['size_m'], '.2f')}m"
                             f"{'' if not c.get('ref_size_m') else ' (median %.2f)' % c['ref_size_m']} "
-                            f"dz {c['dz_m']:+.2f}m gap {c['gap']:.2f} wrist {c['wrist_gap']:.2f} "
+                            f"dz {num(c['dz_m'], '+.2f')}m gap {num(c['gap'], '.2f')} wrist {num(c['wrist_gap'], '.2f')} "
                             f"[{'+'.join(c.get('views', ['image']))}] — {verdict}"))
+    off = cand["frame_offset"]
+    if rec is not None:                                   # final support / rejected-as-different-object boxes
+        sup = (rec.get("per_frame_boxes") or {}).get(str(f))
+        if sup:
+            b = sup["box"]
+            d.rectangle([b["x0"] - 6, b["y0"] - 6, b["x1"] + 6, b["y1"] + 6], outline=CYAN, width=6)
+            d.text((b["x0"], b["y1"] + 8), f"SUPPORT {num(sup.get('size_m'), '.2f')} m", fill=CYAN, font=font(26))
+            legend.append((CYAN, f"support box: {num(sup.get('size_m'), '.2f')} m"))
+            uniq.append({"box": b})
+        typ = rec.get("ref_size_m")
+        for r in rec.get("rejected_inconsistent", []):
+            if r["video_frame"] - off == f:
+                b = r["box"]
+                ratio = (max(r["size_m"] / typ, typ / r["size_m"]) if typ and r.get("size_m") else None)
+                d.rectangle([b["x0"], b["y0"], b["x1"], b["y1"]], outline=MAGENTA, width=6)
+                d.text((b["x0"] + 3, b["y0"] + 28), f"DIFFERENT OBJECT x{num(ratio, '.1f')}", fill=MAGENTA, font=font(24))
+                legend.append((MAGENTA, f"rejected as a different object: {num(r.get('size_m'), '.2f')} m vs typical "
+                                        f"{num(typ, '.2f')} m (x{num(ratio, '.1f')})"))
+                uniq.append({"box": b})
     # crop around the actor and all detections
     xs = [pb["x0"], pb["x1"]] + [c["box"][k] for c in uniq for k in ("x0", "x1")]
     ys = [pb["y0"], pb["y1"]] + [c["box"][k] for c in uniq for k in ("y0", "y1")]
@@ -119,14 +148,25 @@ def review_episode(W: str, review_dir: str) -> dict:
         chosen = next(c for c in cand["candidates"] if c["frame"] == rec["reference_frame"]
                       and abs(c["box"]["x0"] - rec["box"]["x0"]) < 1 and abs(c["box"]["y0"] - rec["box"]["y0"]) < 1)
         add("size in prior", lo <= rec["size_m"] <= hi, f"{rec['size_m']:.2f} m (accept {lo:.2f}-{hi:.2f})")
-        add("seen on frames", len(rec["frames_with_object"]) >= 3, f"{len(rec['frames_with_object'])}/5 frames")
-        add("size consistent", abs(math.log(rec["size_m"] / rec["ref_size_m"])) <= math.log(1.4),
-            f"chosen {rec['size_m']:.2f} m vs median {rec['ref_size_m']:.2f} m of all accepted boxes")
-        add("near a wrist", rec["wrist_gap"] <= 0.15, f"{rec['wrist_gap']:.2f} actor heights")
+        n_s, n_f = len(rec["frames_with_object"]), len(cand["frames"])
+        add("supported on frames", n_s >= max(2, n_f / 2), f"{n_s}/{n_f} sampled frames support one consistent object",
+            "FAIL" if n_s < 2 else "WARN")
+        cf = rec.get("consistency_factor", 1.5)
+        typ = rec["ref_size_m"]
+        worst = max(max(v["size_m"] / typ, typ / v["size_m"]) for v in rec["per_frame_boxes"].values())
+        add("supports agree in size", worst <= cf + 1e-6,
+            f"every support within x{worst:.2f} of the typical {typ:.2f} m (limit x{cf}); max/min x{rec['size_spread']:.2f}; "
+            f"chosen {rec['size_m']:.2f} m")
+        rj = rec.get("rejected_inconsistent", [])
+        add("boxes rejected as a different object", True,
+            f"{len(rj)}" + (": " + ", ".join(f"video frame {r['video_frame']} ({num(r.get('size_m'), '.2f')} m)"
+                                             for r in rj[:6]) if rj else ""))
+        add("near a wrist", rec["wrist_gap"] is not None and rec["wrist_gap"] <= 0.15,
+            f"{num(rec['wrist_gap'], '.2f')} actor heights")
     elif ok:
         chosen = {"frame": rec["reference_frame"], "box": rec["box"], "tag": "full"}
 
-    tiles = [tile_frame(W, cand, f, chosen) for f in cand["frames"]]
+    tiles = [tile_frame(W, cand, f, chosen, rec if ok else None) for f in cand["frames"]]
     top = None
     if ok:
         f = rec["reference_frame"]
@@ -139,7 +179,7 @@ def review_episode(W: str, review_dir: str) -> dict:
         zoom = zoom.resize((int(zoom.width * full.height / zoom.height), full.height))
         top = Image.new("RGB", (full.width + zoom.width + 10, full.height), (0, 0, 0))
         top.paste(full, (0, 0)); top.paste(zoom, (full.width + 10, 0))
-    cols = 2
+    cols = 3
     tw = max(t.width for t in tiles)
     rows = [tiles[i:i + cols] for i in range(0, len(tiles), cols)]
     rh = [max(t.height for t in r) for r in rows]
@@ -160,7 +200,8 @@ def review_episode(W: str, review_dir: str) -> dict:
     os.makedirs(review_dir, exist_ok=True)
     path = os.path.join(review_dir, f"{ep}_select.png")
     sheet.save(path)
-    return {"episode": rec["episode"], "status": status, "checks": checks, "sheet": os.path.basename(path)}
+    return {"episode": rec["episode"], "status": status, "checks": checks, "sheet": os.path.basename(path),
+            "version": REVIEW_VERSION}
 
 
 def main() -> None:
@@ -184,6 +225,7 @@ def main() -> None:
         key_out = os.path.join(W, "select", "object_track.json")
         reuse_ok = (os.path.exists(chk_path) and os.path.exists(key_out)
                     and os.path.getmtime(chk_path) > os.path.getmtime(key_out)
+                    and json.load(open(chk_path)).get("version") == REVIEW_VERSION
                     and os.path.exists(os.path.join(review, json.load(open(chk_path)).get("sheet", "-"))))
         if reuse_ok:                      # sheet already up to date: reuse it
             results.append(json.load(open(chk_path)))
@@ -197,7 +239,8 @@ def main() -> None:
     out = ["<html><head><meta charset='utf-8'><title>Stage 3 object selection</title><style>body{font-family:"
            "sans-serif;background:#111;color:#eee} td,th{border:1px solid #444;padding:3px 7px} table{border-"
            "collapse:collapse} img{max-width:100%}</style></head><body><h1>Stage 3 — object selection</h1>"
-           "<p>Check: the GREEN box is the object the person handles, and only that object. Grey = hidden by the "
+           "<p>Check: the GREEN box is the object the person handles, and only that object; every CYAN support box is "
+           "the same object; MAGENTA boxes were rejected as a different object (size). Grey = hidden by the "
            "V wedge (top view on the right of each frame: red V, yellow actor, white camera). If wrong, write seeds/episode_XXXXXX.json "
            "with {\"video_frame\": N, \"box\": [x0, y0, x1, y1]}.</p><table><tr><th>episode</th><th>status</th>"
            "<th>checks</th></tr>"]

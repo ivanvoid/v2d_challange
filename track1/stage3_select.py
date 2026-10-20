@@ -67,13 +67,23 @@ def box_dict(b) -> dict:
     return {"x0": float(b[0]), "y0": float(b[1]), "x1": float(b[2]), "y1": float(b[3])}
 
 
-def region_depth(d: np.ndarray, box: dict, pct: float) -> float | None:
+def region_depth(d: np.ndarray, box: dict, pct: float, min_valid: int = 20) -> float | None:
+    """Percentile of the VALID depth inside the box (NaN = no depth or masked out); None if too few."""
     h, w = d.shape
     x0, x1 = int(max(0, box["x0"])), int(min(w, box["x1"]))
     y0, y1 = int(max(0, box["y0"])), int(min(h, box["y1"]))
     if x1 <= x0 or y1 <= y0:
         return None
-    return float(np.percentile(d[y0:y1, x0:x1], pct))
+    v = d[y0:y1, x0:x1]
+    v = v[np.isfinite(v)]
+    return float(np.percentile(v, pct)) if v.size >= min_valid else None
+
+
+def valid_depth(depth_dir: str, f: int) -> np.ndarray:
+    """Depth in metres with pixels that have no depth (encoded 0 -> ~1e6 m) set to NaN."""
+    d = load_depth(depth_dir, f).astype(np.float32)
+    d[~(d < 100.0)] = np.nan
+    return d
 
 
 def point_box_gap(p, box: dict) -> float:
@@ -111,9 +121,13 @@ def main() -> None:
     ap.add_argument("--episode", type=int, required=True)
     ap.add_argument("--out_root", required=True)
     ap.add_argument("--weights", required=True)
-    ap.add_argument("--n_frames", type=int, default=5)
-    ap.add_argument("--v_back_m", type=float, default=0.7, help="V apex distance behind the actor, metres")
-    ap.add_argument("--v_reach_m", type=float, default=0.9, help="V half-width at the actor's depth, metres")
+    ap.add_argument("--n_frames", type=int, default=9, help="frames sampled across the contact span")
+    ap.add_argument("--consistency", type=float, default=1.5,
+                    help="a supporting box must be within this factor of the object's typical size")
+    ap.add_argument("--v_back_m", type=float, default=0.7,
+                    help="V apex distance behind the actor = this + the object's max size (prior), metres")
+    ap.add_argument("--v_reach_m", type=float, default=0.9,
+                    help="V half-width at the actor's depth = arm reach (this) + the object's max size, metres")
     ap.add_argument("--max_gap", type=float, default=0.1, help="max image gap to the actor, actor heights")
     ap.add_argument("--max_dz", type=float, default=0.6, help="max |object - actor| depth, metres")
     ap.add_argument("--size_slack", type=float, default=1.6, help="size prior [lo/slack, hi*slack]")
@@ -148,10 +162,25 @@ def main() -> None:
                     weights_only=False)["pred_keypoints_2d"].numpy()
 
     frames = candidate_frames(first - off, last - off, args.n_frames)
+    pt_path = os.path.join(W, "body", "person_track.json")
+    labels = [r["label"] for r in json.load(open(pt_path))["per_frame"]] if os.path.exists(pt_path) else None
+    if labels:                                   # snap each sample to the nearest directly detected actor frame
+        snapped = []
+        for f in frames:
+            near = [g for g in range(max(0, f - 10), min(len(labels), f + 11)) if labels[g] == "detected"]
+            snapped.append(min(near, key=lambda g: abs(g - f)) if near else f)
+        frames = sorted(set(snapped))
+    person_mask = {}
+    def actor_mask(f: int):
+        if f not in person_mask:
+            mp = os.path.join(W, "body", "person_masks", f"{f:06d}.png")
+            person_mask[f] = np.asarray(Image.open(mp)) > 0 if os.path.exists(mp) else None
+        return person_mask[f]
     frames_dir, depth_dir = os.path.join(W, "frames"), os.path.join(W, "depth")
-    # Size-aware V: large objects (desk, cart) reach further sideways / behind the actor.
-    v_back = max(args.v_back_m, 0.8 * hi_m)
-    v_reach = max(args.v_reach_m, hi_m)
+    # V = arm reach + object size: an object held at arm's length (hoop to the side, roller pushed along,
+    # desk or cart pushed ahead) must stay fully inside, otherwise the detector sees a cut object.
+    v_back = args.v_back_m + hi_m
+    v_reach = args.v_reach_m + hi_m
     cx, half_tan = intr["cx"], v_reach / v_back            # tan of the V half-angle
     log(f"  V wedge: apex {v_back:.2f} m behind the actor, half-width {v_reach:.2f} m at the actor's depth")
     actor, near_info = {}, {}
@@ -159,11 +188,12 @@ def main() -> None:
     os.makedirs(near_dir, exist_ok=True)
     for f in frames:
         pb = box_dict(boxes[f])
-        d = load_depth(depth_dir, f)
+        d = valid_depth(depth_dir, f)
         ph = pb["y1"] - pb["y0"]
         core = {"x0": pb["x0"] + 0.25 * (pb["x1"] - pb["x0"]), "x1": pb["x1"] - 0.25 * (pb["x1"] - pb["x0"]),
                 "y0": pb["y0"] + 0.15 * ph, "y1": pb["y1"] - 0.15 * ph}
-        pz = region_depth(d, core, 50)
+        am = actor_mask(f)
+        pz = float(np.nanmedian(d[am])) if am is not None and np.isfinite(d[am]).sum() >= 50 else region_depth(d, core, 50)
         actor[f] = {"box": pb, "height_px": ph, "depth_m": pz,
                     "wrist_r": kp[f, R_WRIST].tolist(), "wrist_l": kp[f, L_WRIST].tolist()}
         # V wedge seen from above: two vertical planes meeting at the apex, v_back_m behind the actor,
@@ -172,10 +202,18 @@ def main() -> None:
         xs = (np.arange(w)[None, :] - cx) * d / fx                       # lateral metres, per pixel
         xp = ((pb["x0"] + pb["x1"]) / 2 - cx) * pz / fx                  # actor's lateral position
         apex_z = pz + v_back
-        far = np.abs(xs - xp) > (apex_z - d) * half_tan                  # outside the V (or behind the apex)
+        far = ~(np.abs(xs - xp) <= (apex_z - d) * half_tan)              # outside the V, behind the apex, or no depth
+        # Thin objects (a hula hoop rim) take the depth of the wall behind them, so the per-pixel depth test would
+        # grey the object the actor is holding: for them, never grey the zone the actor can reach (the actor's box
+        # widened by arm reach + object size, in pixels at the actor's depth, above the head too).
+        if prior.get("thin"):                    # object_priors.json "thin": true (hula hoop)
+            rp = (args.v_reach_m + hi_m) * fx / pz
+            zy0, zy1 = int(max(0, pb["y0"] - rp)), int(min(h, pb["y1"] + 0.25 * rp))
+            zx0, zx1 = int(max(0, pb["x0"] - rp)), int(min(w, pb["x1"] + rp))
+            far[zy0:zy1, zx0:zx1] = False
         # How much of the actor's own body (core of its box, at actor depth) the V would hide.
         y0, y1, x0, x1 = int(core["y0"]), int(core["y1"]), int(core["x0"]), int(core["x1"])
-        body = np.abs(d[y0:y1, x0:x1] - pz) < 0.4
+        body = np.abs(np.nan_to_num(d[y0:y1, x0:x1], nan=1e6) - pz) < 0.4
         actor_hidden = float(far[y0:y1, x0:x1][body].mean()) if body.any() else 0.0
         near_info[f] = {"greyed_fraction": float(far.mean()), "actor_hidden_fraction": actor_hidden,
                         "apex": [xp, apex_z], "actor_xz": [xp, pz], "half_angle_deg": math.degrees(math.atan(half_tan))}
@@ -190,14 +228,17 @@ def main() -> None:
     small = hi_m <= 0.6
     gd_weights = os.path.join(os.path.abspath(args.weights), "grounding_dino")
 
-    def measure(b: dict, f: int, d: np.ndarray) -> dict:
+    def measure_on(b: dict, f: int, d: np.ndarray) -> dict:
         a = actor[f]
-        oz = min(v for v in (region_depth(d, b, 20),
-                             region_depth(d, {"x0": b["x0"] + 0.25 * (b["x1"] - b["x0"]),
-                                              "x1": b["x1"] - 0.25 * (b["x1"] - b["x0"]),
-                                              "y0": b["y0"] + 0.25 * (b["y1"] - b["y0"]),
-                                              "y1": b["y1"] - 0.25 * (b["y1"] - b["y0"])}, 50))
-                 if v is not None)
+        oz = min((v for v in (region_depth(d, b, 20),
+                              region_depth(d, {"x0": b["x0"] + 0.25 * (b["x1"] - b["x0"]),
+                                               "x1": b["x1"] - 0.25 * (b["x1"] - b["x0"]),
+                                               "y0": b["y0"] + 0.25 * (b["y1"] - b["y0"]),
+                                               "y1": b["y1"] - 0.25 * (b["y1"] - b["y0"])}, 50))
+                  if v is not None), default=None)
+        if oz is None:
+            return {"depth_m": None, "dz_m": None, "size_m": None, "gap": None, "wrist_gap": None, "actor_iou": None,
+                    "reasons": ["no valid depth in the box"]}
         size = max(b["x1"] - b["x0"], b["y1"] - b["y0"]) * oz / fx
         gap = rect_gap(b, a["box"]) / a["height_px"]
         wgap = min(point_box_gap(a["wrist_r"], b), point_box_gap(a["wrist_l"], b)) / a["height_px"]
@@ -214,6 +255,24 @@ def main() -> None:
             reasons.append(f"is the actor (IoU {iou_p:.2f})")
         return {"depth_m": oz, "dz_m": dz, "size_m": size, "gap": gap, "wrist_gap": wgap, "actor_iou": iou_p,
                 "reasons": reasons}
+
+    def measure(b: dict, f: int, d: np.ndarray) -> dict:
+        """Gates for one box. The object's depth is measured on valid depth OUTSIDE the actor's person mask
+        (hands and arms holding the object would pull its depth and size). A hollow object around the actor
+        (hula hoop) shows mostly background through it once the actor is removed: if that measurement fails
+        only on depth while the one including the actor's pixels passes, the latter is used and labelled."""
+        am = actor_mask(f)
+        if am is None:
+            return {**measure_on(b, f, d), "depth_source": "all pixels (no person mask)"}
+        dm = d.copy(); dm[am] = np.nan
+        m = measure_on(b, f, dm)
+        if not m["reasons"]:
+            return {**m, "depth_source": "object pixels (actor excluded)"}
+        if m["dz_m"] is None or all(r.startswith("depth") for r in m["reasons"]):
+            m_all = measure_on(b, f, d)
+            if not m_all["reasons"]:
+                return {**m_all, "depth_source": "with actor pixels (object overlaps the actor, e.g. a hoop around it)"}
+        return {**m, "depth_source": "object pixels (actor excluded)"}
 
     def views(images_dir: str, tag: str, f: int) -> list[dict]:
         """Test-time augmentation: the image, its mirror, and (small objects) a zoom on the hands.
@@ -278,15 +337,15 @@ def main() -> None:
         cands, options = [], []
         for rung, prompt in enumerate(ladder):
             for f in frames:
-                d = load_depth(depth_dir, f)
+                d = valid_depth(depth_dir, f)
                 for k, det in enumerate(merged_dets(vmap[f], cand_dir, rung, f)):
                     m = measure(det["box"], f, d)
                     conf = float(det.get("confidence", 0)) * (1.0 + 0.1 * (len(det["views"]) - 1))
                     cands.append({"tag": tag, "rung": rung, "prompt": prompt, "frame": f, "video_frame": f + off,
                                   "k": k, "label": det.get("label", ""), "conf": conf, "views": det["views"],
                                   "box": det["box"], **{x: m[x] for x in ("depth_m", "dz_m", "size_m", "gap",
-                                                                         "wrist_gap", "actor_iou")},
-                                  "score": conf * math.exp(-m["wrist_gap"] / 0.25),
+                                                                         "wrist_gap", "actor_iou", "depth_source")},
+                                  "score": conf * math.exp(-(m["wrist_gap"] or 9) / 0.25),
                                   "accepted": not m["reasons"], "reasons": m["reasons"]})
         for rung, prompt in enumerate(ladder):
             # Size consensus: the same rigid object should have about the same metric size on
@@ -296,21 +355,27 @@ def main() -> None:
             for c in cands:
                 if c["rung"] == rung:
                     c["ref_size_m"] = ref_size
-                    c["size_factor"] = (math.exp(-abs(math.log(c["size_m"] / ref_size)) / 0.3)
-                                        if ref_size else 1.0)
-                    c["score"] = c["conf"] * math.exp(-c["wrist_gap"] / 0.25) * c["size_factor"]
+                    ok_size = c["size_m"] is not None and ref_size
+                    c["size_factor"] = (math.exp(-abs(math.log(c["size_m"] / ref_size)) / 0.3) if ok_size else 1.0)
+                    c["consistent"] = bool(not ok_size or max(c["size_m"] / ref_size, ref_size / c["size_m"])
+                                           <= args.consistency)
+                    c["score"] = c["conf"] * math.exp(-(c["wrist_gap"] or 9) / 0.25) * c["size_factor"]
             for thr in THRESHOLDS:
                 best = {}
                 for c in cands:
-                    if c["rung"] == rung and c["accepted"] and c["conf"] >= thr:
+                    if c["rung"] == rung and c["accepted"] and c["consistent"] and c["conf"] >= thr:
                         if c["frame"] not in best or c["score"] > best[c["frame"]]["score"]:
                             best[c["frame"]] = c
                 if len(best) >= min(2, len(frames)):
                     top = max(best.values(), key=lambda c: c["score"])
                     sizes = [c["size_m"] for c in best.values()]
+                    inconsistent = [{"video_frame": c["video_frame"], "size_m": c["size_m"], "conf": c["conf"],
+                                     "box": c["box"]} for c in cands
+                                    if c["rung"] == rung and c["accepted"] and not c["consistent"] and c["conf"] >= thr]
                     options.append({"rung": rung, "prompt": prompt, "threshold": thr, "chosen": top,
                                     "frames_with_object": sorted(best), "per_frame_best": best,
-                                    "size_spread": max(sizes) / min(sizes), "ref_size_m": ref_size})
+                                    "size_spread": max(sizes) / min(sizes), "ref_size_m": ref_size,
+                                    "rejected_inconsistent": inconsistent})
         if not options:
             return cands, None
         # Most frames with the object wins; then the higher threshold (stricter), then the earlier prompt.
@@ -322,9 +387,30 @@ def main() -> None:
         seed = json.load(open(seed_path))
         f = int(seed["video_frame"]) - off
         b = box_dict(seed["box"])
+        H_, W_ = np.asarray(Image.open(os.path.join(frames_dir, "000000.png"))).shape[:2]
+        n_clip = meta["n_frames"]
+        problems = []
+        if not 0 <= f < n_clip:
+            problems.append(f"video frame {f + off} is outside the clip {off}..{off + n_clip - 1}")
+        if not (0 <= b["x0"] < b["x1"] <= W_ and 0 <= b["y0"] < b["y1"] <= H_):
+            problems.append(f"box {seed['box']} is not inside the {W_}x{H_} image")
+        if not problems:
+            if f not in actor:                                 # gates need the actor at that frame
+                pb_ = box_dict(boxes[f]); d_ = valid_depth(depth_dir, f)
+                am_ = actor_mask(f)
+                pz_ = float(np.nanmedian(d_[am_])) if am_ is not None else region_depth(d_, pb_, 50)
+                actor[f] = {"box": pb_, "height_px": pb_["y1"] - pb_["y0"], "depth_m": pz_,
+                            "wrist_r": kp[f, R_WRIST].tolist(), "wrist_l": kp[f, L_WRIST].tolist()}
+            ms = measure(b, f, valid_depth(depth_dir, f))
+            if ms["size_m"] is None or not size_lo <= ms["size_m"] <= size_hi:
+                problems.append(f"seed size {ms['size_m']} m is outside the prior {size_lo:.2f}-{size_hi:.2f} m")
+        if problems:
+            log(f"{ep}: stage 3 FAILED — manual seed {seed_path} rejected: " + "; ".join(problems))
+            raise SystemExit(3)
         mode = "manual"
         decision = {"chosen": {"frame": f, "video_frame": f + off, "box": b, "conf": 1.0, "prompt": "manual seed",
-                               "label": "manual", "size_m": None, "dz_m": None, "gap": None, "wrist_gap": None},
+                               "label": "manual", "size_m": ms["size_m"], "dz_m": ms["dz_m"], "gap": ms["gap"],
+                               "wrist_gap": ms["wrist_gap"]},
                     "prompt": "manual seed", "threshold": None, "frames_with_object": [f], "size_spread": 1.0}
         log(f"  MANUAL seed from {seed_path}: video frame {f + off}, box {seed['box']}")
     else:
@@ -352,7 +438,7 @@ def main() -> None:
             return ix * iy / max(area(inner), 1.0)
         grown = 0
         for f, c in decision["per_frame_best"].items():
-            d = load_depth(depth_dir, f)
+            d = valid_depth(depth_dir, f)
             pool = []
             for det in merged_dets(vmap[f], full_dir, 0, f):
                 b = det["box"]
@@ -361,10 +447,41 @@ def main() -> None:
             if pool:
                 b = max(pool, key=area)
                 if area(b) > 1.15 * area(c["box"]):
-                    c["box_near"], c["box"] = c["box"], b
-                    c["size_m"] = measure(b, f, d)["size_m"]
-                    grown += 1
-        log(f"  whole-object refinement on full frames: {grown}/{len(fr_frames)} boxes grown")
+                    m = measure(b, f, d)                      # every measurement of the grown box, re-gated
+                    if not m["reasons"]:
+                        c["box_near"], c["box"] = c["box"], b
+                        c.update({x: m[x] for x in ("depth_m", "dz_m", "size_m", "gap", "wrist_gap", "actor_iou")})
+                        grown += 1
+        log(f"  whole-object refinement on full frames: {grown}/{len(fr_frames)} boxes grown (re-measured, re-gated)")
+
+    if decision and mode in ("near", "full"):
+        # Final consistency over the supports as they are now (after growth): one rigid object has about the
+        # same metric size on every frame; a box far from the typical size is another object (ep 13: the table).
+        best = decision["per_frame_best"]
+        dropped = {}
+        while len(best) >= 2:                       # repeat until stable: the typical size moves when one drops
+            typical = float(np.median([c["size_m"] for c in best.values()]))
+            ratio = {f: max(c["size_m"] / typical, typical / c["size_m"]) for f, c in best.items()}
+            worst = max(ratio, key=ratio.get)
+            if ratio[worst] <= args.consistency:
+                break
+            dropped[worst] = best.pop(worst)
+            log(f"  support at video frame {worst + off} dropped: size {dropped[worst]['size_m']:.2f} m vs typical "
+                f"{typical:.2f} m (x{ratio[worst]:.2f})")
+        decision["rejected_inconsistent"] = decision.get("rejected_inconsistent", []) + [
+            {"video_frame": int(f + off), "size_m": c["size_m"], "conf": c["conf"], "box": c["box"], "stage": "final"}
+            for f, c in dropped.items()]
+        decision["frames_with_object"] = sorted(best)
+        if best:
+            sizes = [c["size_m"] for c in best.values()]
+            decision["size_spread"] = max(sizes) / min(sizes)
+            decision["ref_size_m"] = float(np.median(sizes))
+            if decision["chosen"]["frame"] not in best:
+                decision["chosen"] = max(best.values(), key=lambda c: c["score"])
+        if len(best) < 2:
+            log(f"{ep}: stage 3 FAILED — only {len(best)} frame(s) support one consistent object "
+                f"(need 2 of {len(frames)}); add a manual seed at {seed_path}")
+            decision = None
 
     n_acc = sum(c["accepted"] for c in all_cands)
     json.dump({"episode": args.episode, "object": md["object"], "ladder": ladder,
@@ -384,7 +501,10 @@ def main() -> None:
                        "ref_size_m": decision.get("ref_size_m"),
                        "per_frame_boxes": {str(k): {"box": v["box"], "conf": v["conf"], "size_m": v["size_m"]}
                                            for k, v in decision.get("per_frame_best", {}).items()},
-                       "dz_m": c["dz_m"], "gap": c["gap"], "wrist_gap": c["wrist_gap"]})
+                       "dz_m": c["dz_m"], "gap": c["gap"], "wrist_gap": c["wrist_gap"],
+                       "frames_sampled": [int(x) for x in frames],
+                       "rejected_inconsistent": decision.get("rejected_inconsistent", []),
+                       "consistency_factor": args.consistency})
         json.dump([{"label": c["label"], "confidence": c["conf"], "box": c["box"]}],
                   open(os.path.join(W, "dino_detections.json"), "w"), indent=2)
         json.dump(record, open(os.path.join(W, "object_track.json"), "w"), indent=2)
@@ -397,7 +517,7 @@ def main() -> None:
             f"conf {c['conf']:.2f}, size {size_txt}, object on {len(decision['frames_with_object'])}/"
             f"{len(frames)} frames ({n_acc}/{len(all_cands)} detections accepted)")
     else:
-        log(f"{ep}: stage 3 FAILED — no detection passed the gates ({len(all_cands)} detections); "
+        log(f"{ep}: stage 3 FAILED — no consistent object passed the gates ({len(all_cands)} detections); "
             f"add a manual seed at {seed_path}")
         raise SystemExit(3)
 
