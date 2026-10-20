@@ -10,7 +10,8 @@ the object is tested on frames of ALL its videos:
   pass 1     every candidate, at its own metric size, registered independently on every frame;
              per frame the best of FoundationPose's distinct orientations (>= 45 deg apart) by
              silhouette IoU. Colour is NOT used here: a wrong texture must not decide the shape.
-             score = mean over videos of the median IoU in that video (a mesh must fit all three)
+             score = mean over videos of (median IoU + median coverage) / 2 in that video (a mesh must fit
+            all three; coverage = share of the mask the mesh covers, so a missing part such as a handle counts)
   pass 2     the best 2 candidates: per video, relative scale in --rels; per video the best scale
              is kept (each video has its own depth scale; stage 8 maps everything to the body)
   choice     the candidate with the best score after pass 2
@@ -132,7 +133,8 @@ def main() -> None:
         m = d["mask"].mask.astype(bool)
         ious = [(dep[i] & m).sum() / max((dep[i] | m).sum(), 1) for i in range(len(distinct))]
         b = int(np.argmax(ious))
-        return float(ious[b]), distinct[b], col[b].cpu().numpy(), dep[b]
+        cov = float((dep[b] & m).sum() / max(m.sum(), 1))            # share of the mask the mesh covers
+        return float(ious[b]), distinct[b], col[b].cpu().numpy(), dep[b], cov
 
     def score_cand(path, rel_per_video=None, keep_render=False):
         with to_debug(dbg, f"load {path}"):
@@ -145,7 +147,11 @@ def main() -> None:
                 with to_debug(dbg, f"rescale {rel}"):
                     tr.rescale_to(rel)
             res = [eval_frame(tr, v, d) for d in v["data"]]
-            per[e] = {"ious": [r[0] for r in res], "median": float(np.median([r[0] for r in res])) if res else 0.0}
+            ious, covs = [r[0] for r in res], [r[4] for r in res]
+            per[e] = {"ious": ious, "coverages": covs,
+                      "median_iou": float(np.median(ious)) if res else 0.0,
+                      "median_coverage": float(np.median(covs)) if res else 0.0}
+            per[e]["median"] = (per[e]["median_iou"] + per[e]["median_coverage"]) / 2    # the score used below
             if keep_render:
                 per[e]["renders"] = [(r[2], r[3]) for r in res]
             if rel != 1.0:
@@ -161,9 +167,10 @@ def main() -> None:
         per = score_cand(path)
         s = float(np.mean([p["median"] for p in per.values()]))
         pass1.append({"source_episode": e, "candidate": os.path.basename(path), "path": path, "score": s,
-                      "per_video": {str(k): {"median_iou": p["median"], "ious": p["ious"]} for k, p in per.items()}})
+                      "per_video": {str(k): {"median_iou": p["median_iou"], "median_coverage": p["median_coverage"],
+                                             "score": p["median"], "ious": p["ious"]} for k, p in per.items()}})
         log(f"  pass 1 {os.path.basename(path)} of ep {e}: " + ", ".join(
-            f"ep{k} {p['median']:.2f}" for k, p in per.items()) + f" -> score {s:.2f}")
+            f"ep{k} IoU {p['median_iou']:.2f} cov {p['median_coverage']:.2f}" for k, p in per.items()) + f" -> score {s:.2f}")
 
     # ---- pass 2: best 2, per-video relative scale
     pass2 = []
@@ -178,7 +185,7 @@ def main() -> None:
         pass2.append({**c, "rel_per_video": {str(k): v for k, v in best_rel.items()},
                       "median_per_video": {str(k): v for k, v in best_med.items()}, "score2": s})
         log(f"  pass 2 {c['candidate']} of ep {c['source_episode']}: " + ", ".join(
-            f"ep{k} x{best_rel[k]:.2f} IoU {best_med[k]:.2f}" for k in best_med) + f" -> score {s:.2f}")
+            f"ep{k} x{best_rel[k]:.2f} (IoU+cov)/2 {best_med[k]:.2f}" for k in best_med) + f" -> score {s:.2f}")
     win = max(pass2, key=lambda c: c["score2"])
 
     # ---- write the chosen mesh to every video
@@ -199,7 +206,9 @@ def main() -> None:
         ref = v["data"][int(np.argmax(ious))]["frame"] if v["data"] else None
         json.dump({"object": args.object, "source_episode": win["source_episode"], "source_candidate": win["candidate"],
                    "rel_scale": rel, "extent_m": float(np.ptp(vv, axis=0).max()),
-                   "median_iou": win["median_per_video"][str(e)], "track_ref_frame": ref,
+                   "score_iou_coverage": win["median_per_video"][str(e)],
+                   "median_iou": win["per_video"][str(e)]["median_iou"],
+                   "median_coverage": win["per_video"][str(e)]["median_coverage"], "track_ref_frame": ref,
                    "own_mesh": win["source_episode"] == e},
                   open(os.path.join(W, "mesh", "object_choice.json"), "w"), indent=1)
     rep = {"object": args.object, "videos": list(videos), "pass1": [{k: v for k, v in c.items() if k != "path"}
