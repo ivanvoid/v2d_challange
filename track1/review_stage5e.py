@@ -16,6 +16,64 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import paths  # noqa: E402
 
+GALLERY_TILE = 190
+
+
+def gallery(o: str, vids: list[int], rep: dict, out_root: str, path: str) -> None:
+    """All candidate meshes of the object: 4 views each (as seen in its own frame, oblique, side, top), labelled
+    with its 5c rank in its own video, its 5e score (or 'not tested') and the choice. Shape faults that outline
+    scores cannot see (a bent handle, a blob without a handle) are visible here."""
+    import cv2
+    import numpy as np
+    import trimesh
+    from review_stage5 import render_view
+    tested = {(c["source_episode"], c["candidate"]): c for c in rep.get("candidates", [])}
+    ch = rep["chosen"]
+    a, b = np.radians(40), np.radians(25)
+    R = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]]) @ \
+        np.array([[1, 0, 0], [0, np.cos(b), -np.sin(b)], [0, np.sin(b), np.cos(b)]])
+    rows = []
+    for e in vids:
+        W = os.path.join(out_root, f"episode_{e:06d}")
+        cp = os.path.join(W, "mesh", "choice.json")
+        if not os.path.exists(cp):
+            continue
+        off = json.load(open(os.path.join(W, "track1_meta.json")))["frame_offset"]
+        ranked = sorted(json.load(open(cp))["candidates"], key=lambda x: -x["score"])
+        tiles = []
+        for rank, x in enumerate(ranked, 1):
+            name = f"cand_{x['candidate']:06d}"
+            mp = os.path.join(W, "mesh", name, "mesh_scaled.obj")
+            if not os.path.exists(mp):
+                continue
+            tm = trimesh.load(mp, force="mesh", process=False)
+            v, f = np.asarray(tm.vertices), np.asarray(tm.faces)
+            try:
+                vis = tm.visual.to_color() if type(tm.visual).__name__ == "TextureVisuals" else tm.visual
+                col = np.asarray(vis.vertex_colors)[:, :3].astype(float)
+            except Exception:
+                col = np.full((len(v), 3), 160.0)
+            v = v - v.mean(0)
+            views = [render_view(v, f, col, "camera", GALLERY_TILE), render_view(v @ R.T, f, col, "camera", GALLERY_TILE),
+                     render_view(v, f, col, "side", GALLERY_TILE), render_view(v, f, col, "top", GALLERY_TILE)]
+            img = np.concatenate(views, 1)
+            t = tested.get((e, name))
+            win = (e == ch["source_episode"] and name == ch["candidate"])
+            lab = (f"ep {e} {name} = video frame {x['candidate'] + off} | 5c rank {rank} ({x['score']:.2f}) | "
+                   + (f"5e score {t['score']:.2f}" if t else "5e: not tested") + f" | {x['extent_m']:.2f} m"
+                   + ("  <== CHOSEN" if win else ""))
+            head = np.zeros((30, img.shape[1], 3), np.uint8)
+            cv2.putText(head, lab, (6, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (120, 255, 120) if win else (235, 235, 235), 1,
+                        cv2.LINE_AA)
+            tiles.append(np.concatenate([head, img], 0))
+        if tiles:
+            rows.append(np.concatenate(tiles, 1))
+    if not rows:
+        return
+    wmax = max(r.shape[1] for r in rows)
+    rows = [np.pad(r, ((0, 8), (0, wmax - r.shape[1]), (0, 0))) for r in rows]
+    cv2.imwrite(path, cv2.cvtColor(np.concatenate(rows, 0), cv2.COLOR_RGB2BGR))
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -53,6 +111,12 @@ def main() -> None:
                     f"<td>{'<br>'.join(html.escape(t) for t in vtxt)}</td></tr>")
         sec = [f"<h2 id='{o}'>{html.escape(o)} — {status}</h2><p>logs: <a href='{o}.log'>progress</a> · "
                f"<a href='{o}.debug.log'>debug</a> · <a href='{o}.json'>scores</a></p>"]
+        gp = os.path.join(args.stage_dir, "review", f"{o}_gallery.png")
+        if not os.path.exists(gp) or os.path.getmtime(gp) < os.path.getmtime(rp):
+            gallery(o, vids, r, args.out_root, gp)
+        if os.path.exists(gp):
+            sec.append(f"<h3>all candidate meshes (rows = videos; per mesh: as seen, oblique, side, top)</h3>"
+                       f"<a href='review/{o}_gallery.png'><img src='review/{o}_gallery.png'></a>")
         sheet = os.path.join(args.stage_dir, "review", f"{o}.png")
         if os.path.exists(sheet):
             made = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(sheet)))
