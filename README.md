@@ -44,7 +44,7 @@ and receives `out/` (per-episode results), `logs/stages/` (review pages), `submi
 | 4 | SAM2 masks: boxes from stage 3 + negative points on the body, backward/forward passes averaged, per-frame quality classes, gated recovery and leak repair, acceptance check | `masks/1/ masks_quality.json` |
 | 5 | **generation** (expensive): 3 diverse clear views per video → SAM3D textured meshes (one process, model loaded once) → metric scale search (each size fitted once) | `mesh/candidates.json mesh/cand_*/` |
 | 5c | **per-video selection** (cheap): every candidate fitted on frames it was not built from, scored by (IoU + coverage) / 2 | `mesh/choice.json` |
-| 5e | **one mesh per physical object**: every candidate of the object at sizes ×0.9/1.0/1.1 on frames of all 3 videos, finalists refined; then the exported mesh is validated on held-out frames of each video (accept: median IoU and coverage thresholds) | `mesh_scaled.obj mesh/object_choice.json mesh/validate.json` |
+| 5e | **one mesh per physical object**: each video's top 2 candidates by 5c, at sizes ×0.9/1.0/1.1 on frames of all 3 videos, finalists refined; then the exported mesh is validated on held-out frames of each video (accept: median IoU and coverage thresholds) | `mesh_scaled.obj mesh/object_choice.json mesh/validate.json` |
 | 6 | FoundationPose tracking: anchors, bidirectional chains with hand-over, global (Viterbi) selection | `poses/ track/states.json` |
 | 7 | whole-sequence smoothing with outlier rejection | `poses_smoothed/` |
 | 8 | object scale matched to the body, submission files, QA | `poses_final/`, `submission/episodes/` |

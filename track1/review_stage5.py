@@ -164,7 +164,7 @@ def review_episode(W: str, review_dir: str) -> dict:
         crop = img[max(0, ys.min() - pad):ys.max() + pad, max(0, xs.min() - pad):xs.max() + pad]
         chosen = c == choice["chosen"]
         ax = fig.add_subplot(gs[r0, 0]); ax.imshow(crop); ax.axis("off")
-        ax.set_title(f"built from video frame {c + off}" + ("  — CHOSEN" if chosen else ""), fontsize=14,
+        ax.set_title(f"cand_{c:06d}\n= video frame {c + off}" + ("\n5c best" if chosen else ""), fontsize=12,
                      color="green" if chosen else "black")
         for j, view in enumerate(("camera", "side", "top")):
             ax = fig.add_subplot(gs[r0, 1 + j]); ax.imshow(render_view(v, f, col, view)); ax.axis("off")
@@ -195,7 +195,7 @@ def review_episode(W: str, review_dir: str) -> dict:
             dtxt = "-" if p["depth_cm"] is None else f"{p['depth_cm']:.1f}cm"
             ax.set_title(f"{'OWN ' if p['own'] else ''}frame {p['video_frame']}\nIoU {p['iou']:.2f}  depth {dtxt}",
                          fontsize=11, color="red" if p["iou"] < 0.5 else "black")
-    fig.suptitle(f"{ep} — stage 5 object mesh — {status} — {obj}, chosen mesh from video frame "
+    fig.suptitle(f"{ep} — stage 5c candidate meshes of this video — {status} — {obj}, best here: video frame "
                  f"{choice['chosen_video_frame']} (blue = mesh fitted on that frame, green = SAM2 mask)", fontsize=17)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     os.makedirs(review_dir, exist_ok=True)

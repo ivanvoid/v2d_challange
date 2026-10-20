@@ -12,7 +12,9 @@ the object is tested on frames of ALL its videos:
              silhouette IoU. Colour is NOT used: a wrong texture must not decide the shape.
              trial score = (median IoU + median coverage) / 2 (coverage = share of the mask the mesh covers,
              so a missing part such as a handle counts)
-  pass 1     EVERY candidate, sizes --coarse (x0.9 / 1.0 / 1.1) in every video, so a good shape whose
+  tested     each video's top --top_per_video (2) candidates by its own 5c check (6 of 9): outlines alone cannot
+             see a wrong 3D shape (pan: a handle bent up into a hook tied the clean pan; 5c had it 3rd of 3)
+  pass 1     every tested candidate, sizes --coarse (x0.9 / 1.0 / 1.1) in every video, so a good shape whose
              first size was a bit off is not dropped; candidate score = mean over videos of its best trial
   pass 2     the best --finalists: sizes --fine around each video's best pass-1 size (pass-1 trials reused)
   choice     the candidate with the best score after pass 2; each video keeps its own best size
@@ -87,6 +89,8 @@ def main() -> None:
     ap.add_argument("--fine", type=float, nargs="+", default=[0.9, 0.95, 1.05, 1.1],
                     help="pass 2: factors around each video's best pass-1 size, for the finalists")
     ap.add_argument("--finalists", type=int, default=2)
+    ap.add_argument("--top_per_video", type=int, default=2,
+                    help="candidates tested per video: the best by that video's own 5c check")
     ap.add_argument("--n_hyp", type=int, default=5)
     args = ap.parse_args()
 
@@ -115,8 +119,14 @@ def main() -> None:
                 continue
             data.append({"frame": f, "rgb": np.asarray(Image.open(os.path.join(W, "frames", f"{f:06d}.png")).convert("RGB")),
                          "depth": DepthImage.load(os.path.join(W, "depth", f"{f:06d}.png")), "mask": m})
-        cands = [os.path.join(W, "mesh", d) for d in sorted(os.listdir(os.path.join(W, "mesh")))
-                 if d.startswith("cand_") and os.path.exists(os.path.join(W, "mesh", d, "mesh_scaled.obj"))]
+        # only this video's best --top_per_video by its own 5c check: a mesh can fit outlines everywhere and still
+        # have a wrong 3D shape (pan: a handle bent up into a hook tied the clean pan at 0.87; 5c had it 3rd of 3)
+        ranked = sorted(c["candidates"], key=lambda x: -x["score"])
+        cands = [os.path.join(W, "mesh", f"cand_{x['candidate']:06d}") for x in ranked[:args.top_per_video]
+                 if os.path.exists(os.path.join(W, "mesh", f"cand_{x['candidate']:06d}", "mesh_scaled.obj"))]
+        for x in ranked[args.top_per_video:]:
+            log(f"  episode {e}: cand_{x['candidate']:06d} (video frame {x['video_frame']}) not tested — 5c rank "
+                f"{ranked.index(x) + 1} of {len(ranked)} in its own video (score {x['score']:.2f})")
         off = json.load(open(os.path.join(W, "track1_meta.json")))["frame_offset"]
         videos[e] = {"W": W, "intr": intr, "data": data, "cands": cands, "off": off}
     cand_list = [(e, cd) for e, v in videos.items() for cd in v["cands"]]
@@ -215,9 +225,10 @@ def main() -> None:
     cands = []
     for e, path in cand_list:
         run_trials(path, {ev: args.coarse for ev in videos})
-        c = summary({"source_episode": e, "candidate": os.path.basename(path), "path": path})
+        c = summary({"source_episode": e, "candidate": os.path.basename(path), "path": path,
+                     "video_frame": int(os.path.basename(path)[5:]) + videos[e]["off"]})
         cands.append(c)
-        log(f"  pass 1 {c['candidate']} of ep {e}: {fmt(c)}")
+        log(f"  pass 1 {c['candidate']} (video frame {c['video_frame']}) of ep {e}: {fmt(c)}")
 
     # ---- pass 2: finalists, finer sizes around each video's best
     finalists = sorted(cands, key=lambda c: -c["score"])[:args.finalists]
@@ -226,7 +237,7 @@ def main() -> None:
                                for k, p in c["per_video"].items()})
         summary(c)
         c["finalist"] = True
-        log(f"  pass 2 {c['candidate']} of ep {c['source_episode']}: {fmt(c)}")
+        log(f"  pass 2 {c['candidate']} (video frame {c['video_frame']}) of ep {c['source_episode']}: {fmt(c)}")
     win = max(finalists, key=lambda c: c["score"])
     win_trial = best_trials(win["path"])
 
@@ -241,7 +252,7 @@ def main() -> None:
         vv = np.array([[float(x) for x in l.split()[1:4]] for l in open(os.path.join(W, "mesh_scaled.obj"))
                        if l.startswith("v ")])
         ref = t["frames"][int(np.argmax(t["ious"]))] if t["frames"] else None   # from the WINNING trial
-        json.dump({"object": args.object, "source_episode": win["source_episode"], "source_candidate": win["candidate"],
+        json.dump({"object": args.object, "source_episode": win["source_episode"], "source_candidate": win["candidate"], "source_video_frame": win["video_frame"],
                    "rel_scale": t["rel"], "extent_m": float(np.ptp(vv, axis=0).max()),
                    "score_iou_coverage": t["score"], "median_iou": t["median_iou"],
                    "median_coverage": t["median_coverage"], "track_ref_frame": ref,
@@ -279,20 +290,23 @@ def main() -> None:
     head = 90 + 24 * len(cands)
     sheet = Image.new("RGB", (max(max(r.width for r in rows), 1600), head + sum(r.height + 10 for r in rows)), (0, 0, 0))
     dr = ImageDraw.Draw(sheet)
-    dr.text((10, 10), f"{args.object}: chosen mesh {win['candidate']} from episode {win['source_episode']} - per tile: "
+    dr.text((10, 10), f"{args.object}: chosen mesh {win['candidate']} (video frame {win['video_frame']}) from episode "
+                      f"{win['source_episode']} - per tile: "
                       f"photo (green = SAM2 mask, blue = model) | textured render", fill=(255, 255, 255), font=font)
     dr.text((10, 45), "score = mean over videos of the best trial's (median IoU + median coverage) / 2; "
                       "* = finalist (finer sizes tried)", fill=(170, 170, 170), font=small)
     for i, c in enumerate(sorted(cands, key=lambda c: -c["score"])):
         mark = "  <== chosen" if c["path"] == win["path"] else ""
-        dr.text((10, 70 + 24 * i), f"{'*' if c.get('finalist') else ' '} {c['candidate']} of ep {c['source_episode']}: "
+        dr.text((10, 70 + 24 * i), f"{'*' if c.get('finalist') else ' '} {c['candidate']} (video frame "
+                f"{c['video_frame']}) of ep {c['source_episode']}: "
                 f"{fmt(c)}{mark}", fill=(120, 255, 120) if mark else (220, 220, 220), font=small)
     y = head
     for r in rows:
         sheet.paste(r, (0, y)); y += r.height + 10
     os.makedirs(os.path.join(args.stage_dir, "review"), exist_ok=True)
     sheet.save(os.path.join(args.stage_dir, "review", f"{args.object}.png"))
-    log(f"{args.object}: stage 5e OK — mesh {win['candidate']} of episode {win['source_episode']} for videos "
+    log(f"{args.object}: stage 5e OK — mesh {win['candidate']} (video frame {win['video_frame']}) of episode "
+        f"{win['source_episode']} for videos "
         f"{list(videos)} (score {win['score']:.2f}; sizes " +
         ", ".join(f"ep{e} x{t['rel']:.2f}" for e, t in win_trial.items()) + f") in {time.time() - t0:.0f}s")
 
