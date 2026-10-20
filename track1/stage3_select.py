@@ -122,6 +122,8 @@ def main() -> None:
     ap.add_argument("--out_root", required=True)
     ap.add_argument("--weights", required=True)
     ap.add_argument("--n_frames", type=int, default=9, help="frames sampled across the contact span")
+    ap.add_argument("--xvideo", type=float, default=1.6,
+                    help="an option must be within this factor of the object's size in at least one of its other videos")
     ap.add_argument("--consistency", type=float, default=1.5,
                     help="a supporting box must be within this factor of the object's typical size")
     ap.add_argument("--v_back_m", type=float, default=0.7,
@@ -379,7 +381,36 @@ def main() -> None:
         if not options:
             return cands, None
         # Most frames with the object wins; then the higher threshold (stricter), then the earlier prompt.
+        if sib_sizes:
+            # Cross-video consistency: the same physical object was already found in the object's other videos.
+            # An option whose typical size is far from theirs is another object (episode 19: the generic prompt
+            # 'roller.' found the white TABLE top on all 9 frames, 0.44-0.62 m, vs 0.20-0.21 m in episodes 18/20).
+            # must agree with AT LEAST ONE other video (one wrong sibling must not move the reference for the rest)
+            ok = [o for o in options if o["ref_size_m"] and any(max(o["ref_size_m"] / x, x / o["ref_size_m"]) <= args.xvideo
+                                                                for x in sib_sizes)]
+            for o in options:
+                if o not in ok:
+                    log(f"  option '{o['prompt']}' (thr {o['threshold']}) rejected: typical size {o['ref_size_m']:.2f} m agrees "
+                        f"with none of the object's other videos {[round(x, 2) for x in sib_sizes]} m")
+            if ok:
+                options = ok
+            else:
+                log(f"  no option agrees with the other videos' sizes {[round(x, 2) for x in sib_sizes]} m; keeping all")
         return cands, max(options, key=lambda o: (len(o["frames_with_object"]), o["threshold"], -o["rung"]))
+
+    # the same object's size in its other videos (their stage-3 results), if already known
+    sib = [json.loads(l)["episode_index"] for l in open(META)
+           if json.loads(l)["object"] == md["object"] and json.loads(l)["episode_index"] != args.episode]
+    sib_sizes = []
+    for e2 in sib:
+        p2 = os.path.join(os.path.abspath(args.out_root), f"episode_{e2:06d}", "object_track.json")
+        if os.path.exists(p2):
+            r2 = json.load(open(p2))
+            if r2.get("status") == "ok" and (r2.get("ref_size_m") or r2.get("size_m")):
+                sib_sizes.append(r2.get("ref_size_m") or r2.get("size_m"))
+    if sib_sizes:
+        log(f"  the object's typical size in its other videos {sib}: {[round(x, 2) for x in sib_sizes]} m (an option must "
+            f"agree with at least one within x{args.xvideo})")
 
     seed_path = os.path.join(SEEDS, f"{ep}.json")
     all_cands, decision, mode = [], None, None
