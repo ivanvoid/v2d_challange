@@ -93,7 +93,11 @@ and up to date**, and the review pages reuse unchanged sheets.
 
 ### Stage 5 details (object mesh) — generate, select, choose per object, validate
 * **5 generate** (expensive, the only step that runs SAM3D): `stage5_pick.py` picks 3 clearly different
-  views from clear stage-4 "ok" frames, preferring frames where the object looks complete;
+  views from clear stage-4 "ok" frames, preferring frames where the object looks complete (extent = mask's
+  metric size / the object's typical size). Iron has `"view_extent": false` in `object_priors.json`: lying
+  flat on the table it looks short (grazing angle), which the extent term took for a hidden part, dropping
+  ep 6's sharp table view (video frame 723, v1's best-looking iron mesh) for blurry upright views. The rule
+  barely changed the pan's or hoop's views; the bowl's views changed (current meshes fit well);
   `stage5_mesh.py` sends all missing candidates to `sam3d_batch.py`, ONE process that loads SAM3D once
   (the library wrapper reloaded it per mesh, ~1 min each); `stage5_scale.py` searches the metric size
   (coarse-to-fine; a size already fitted on an earlier level is reused).

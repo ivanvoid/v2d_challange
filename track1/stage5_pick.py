@@ -14,6 +14,7 @@ Every 3rd frame of the contact span (scored_first..scored_last) is measured:
   sharpness  variance of the Laplacian inside the object box (motion blur check)
   border     mask touching the image edge (object cut off): excluded
   score = sqrt(area / max_area) * min(1, extent)^2 * (1 - occlusion)^2 * (sharpness / max_sharpness)^0.3
+             (the extent factor is left out for objects with "view_extent": false in object_priors.json: iron)
 
 Candidates are taken greedily by score, each at least --min_sep frames from the others AND with a
 clearly different mask shape (IoU < --max_shape_iou between the masks cropped to their box and resized
@@ -34,6 +35,9 @@ import numpy as np
 import torch
 
 from logutil import log
+import paths
+
+PRIORS = json.load(open(paths.PRIORS))
 
 
 def load_depth(path: str) -> np.ndarray:
@@ -54,6 +58,7 @@ def main() -> None:
 
     ep = f"episode_{args.episode:06d}"
     W = os.path.join(os.path.abspath(args.out_root), ep)
+    obj = next(json.loads(l) for l in open(paths.META) if json.loads(l)["episode_index"] == args.episode)["object"]
     meta = json.load(open(os.path.join(W, "track1_meta.json")))
     off, first, last = meta["frame_offset"], meta["scored_first"], meta["scored_last"]
     intr = json.load(open(os.path.join(W, "intrinsics_stable.json")))
@@ -108,11 +113,16 @@ def main() -> None:
     smax = max(r["sharpness"] for r in pool)
     sizes = [r["size_m"] for r in pool if r["size_m"]]
     full = float(np.percentile(sizes, 90)) if sizes else None
+    # object_priors.json "view_extent": false turns the extent term off (iron: lying flat it looks short, which
+    # is not a hidden part; the term then dropped its best view). Extent is still computed and logged.
+    use_extent = PRIORS.get(obj, {}).get("view_extent", True)
+    if not use_extent:
+        log(f"  {obj}: extent term off (object_priors.json view_extent=false)")
     for r in rows:
         r["extent"] = (r["size_m"] / full) if (full and r["size_m"]) else 1.0
         r["eligible"] = r in pool
-        r["score"] = (np.sqrt(r["area"] / amax) * min(1.0, r["extent"]) ** 2 * (1 - r["occlusion"]) ** 2 *
-                      (r["sharpness"] / smax) ** 0.3) if r["eligible"] else 0.0
+        r["score"] = (np.sqrt(r["area"] / amax) * (min(1.0, r["extent"]) ** 2 if use_extent else 1.0) *
+                      (1 - r["occlusion"]) ** 2 * (r["sharpness"] / smax) ** 0.3) if r["eligible"] else 0.0
     def shape_iou(a, b):
         return float((a["_shape"] & b["_shape"]).sum() / max((a["_shape"] | b["_shape"]).sum(), 1))
     chosen = []

@@ -34,7 +34,9 @@
    "steam iron.",
    "iron."
   ],
-  "prompt": "a metallic clothes iron with blue accents."
+  "prompt": "a metallic clothes iron with blue accents.",
+  "view_extent": false,
+  "_view_extent_why": "stage 5 view picking: an iron lying flat on the table looks short (seen at a grazing angle), and the 'complete object' extent term took that for a hidden part: it dropped ep 6's sharp table view (video frame 723, v1's best iron mesh) for blurry upright views"
  },
  "white_desk": {
   "size_m": [
