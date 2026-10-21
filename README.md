@@ -38,7 +38,7 @@ and receives `out/` (per-episode results), `logs/stages/` (review pages), `submi
 
 | # | Stage | Main outputs (`out/episode_XXXXXX/`) |
 |---|---|---|
-| 1 | trim to the scored span, AnyCalib undistortion, frames, MoGe depth, stable intrinsics | `frames/ depth/ intrinsics_stable.json` |
+| 1 | trim to the scored span, AnyCalib undistortion, frames, MoGe depth (per-frame scale stabilised), stable intrinsics, static background and floor plane | `frames/ depth/ intrinsics_stable.json background.npz floor.json` |
 | 2 | person tracking with masks (detectron2, fragment joining, actor choice) → SAM3D-Body (box + person mask) → one-identity MHR fit → body depth follows the stabilised MoGe trend | `body/mhr_fit.npz` |
 | 3 | object selection: V-wedge background cover, prompt ladder + mirror + hand zoom views, gates on size / depth / distance to the actor, size-consistent supports; an option must also agree in size (×1.6) with the same object in at least one of its other videos; whole-object box | `object_track.json` |
 | 4 | SAM2 masks: boxes from stage 3 + negative points on the body, backward/forward passes averaged, per-frame quality classes, gated recovery and leak repair, acceptance check | `masks/1/ masks_quality.json` |
