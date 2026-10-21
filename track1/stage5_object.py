@@ -18,8 +18,10 @@ the object is tested on frames of ALL its videos:
              first size was a bit off is not dropped; candidate score = mean over videos of its best trial
   pass 2     the best --finalists: sizes --fine around each video's best pass-1 size (pass-1 trials reused)
   choice     the candidate with the best score after pass 2; each video keeps its own best size. Finalists
-             within --tie (0.03, about the score's own noise) are reported as a near-tie and flagged on the
-             review page (the outline score cannot see 3D shape: iron, a handle-less blob 0.90 vs the clean iron 0.87)
+             within --tie (0.03, about the score's own noise) are a near-tie: one whose texture matches the photos
+             clearly better (colour error lower by --colour_margin, after matching brightness) wins (foam block:
+             green paint on the dirt sides); otherwise the outline winner stays and the near-tie is reported
+             (the outline score cannot see 3D shape: iron, a handle-less blob 0.90 vs the clean iron 0.87)
              (each video has its own depth scale; stage 8 maps everything to the body)
 The winning trial's per-frame IoU, coverage, poses and render tiles are kept and used for every report and
 for the tracking reference frame (nothing is refitted for the sheet).
@@ -49,7 +51,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from logutil import log, to_debug  # noqa: E402
-from viz import contrast_bg  # noqa: E402
+from viz import colour_err, contrast_bg  # noqa: E402
 
 from v2d.common.datatypes import CameraIntrinsics, DepthImage, Mask  # noqa: E402
 from v2d.common.datatypes import Image as V2dImage  # noqa: E402
@@ -92,7 +94,9 @@ def main() -> None:
                     help="pass 2: factors around each video's best pass-1 size, for the finalists")
     ap.add_argument("--finalists", type=int, default=2)
     ap.add_argument("--tie", type=float, default=0.03,
-                    help="finalists within this of the best score are reported as a near-tie (flagged for review)")
+                    help="finalists within this of the best score are a near-tie")
+    ap.add_argument("--colour_margin", type=float, default=0.01,
+                    help="a near-tied finalist wins if its texture's colour error is lower by at least this")
     ap.add_argument("--top_per_video", type=int, default=2,
                     help="candidates tested per video: the best by that video's own 5c check")
     ap.add_argument("--n_hyp", type=int, default=5)
@@ -138,7 +142,7 @@ def main() -> None:
         f"{sum(len(v['data']) for v in videos.values())} test frames")
 
     def eval_frame(tr, v, d):
-        """Register; best distinct orientation by IoU. Returns (iou, coverage, pose, tile)."""
+        """Register; best distinct orientation by IoU. Returns (iou, coverage, pose, tile, colour error)."""
         with to_debug(dbg, "register"):
             tr.register(V2dImage(data=d["rgb"]), d["depth"], d["mask"], v["intr"], iteration=5)
         est = tr._est
@@ -158,7 +162,13 @@ def main() -> None:
         ious = [(dep[i] & m).sum() / max((dep[i] | m).sum(), 1) for i in range(len(distinct))]
         b = int(np.argmax(ious))
         cov = float((dep[b] & m).sum() / max(m.sum(), 1))            # share of the mask the mesh covers
-        return float(ious[b]), cov, distinct[b], make_tile(d, col[b].cpu().numpy(), dep[b], m)
+        # texture agreement (used only to break near-ties): among orientations that fit the outline about as well
+        # (a cube fits in many), the best match of the rendered texture with the photo
+        ce = [colour_err(d["rgb"], col[i].cpu().numpy(), dep[i] & m) for i in range(len(distinct))
+              if ious[i] >= ious[b] - 0.03 and (dep[i] & m).sum() > 50]
+        ce = [x for x in ce if np.isfinite(x)]
+        return (float(ious[b]), cov, distinct[b], make_tile(d, col[b].cpu().numpy(), dep[b], m),
+                float(min(ce)) if ce else float("nan"))
 
     def make_tile(d, col, sil, m):
         """Photo crop with the mask (green) and model (blue) outlines | the textured render on a contrasting bg."""
@@ -194,7 +204,9 @@ def main() -> None:
                     tr.rescale_to(rel)
             res = [eval_frame(tr, v, d) for d in v["data"]]
             ious, covs = [r[0] for r in res], [r[1] for r in res]
+            cerr = [r[4] for r in res if np.isfinite(r[4])]
             t = {"rel": rel, "ious": ious, "coverages": covs, "poses": [r[2].tolist() for r in res],
+                 "colour_err": float(np.median(cerr)) if cerr else float("nan"),
                  "tiles": [r[3] for r in res], "frames": [d["frame"] for d in v["data"]],
                  "median_iou": float(np.median(ious)) if res else 0.0,
                  "median_coverage": float(np.median(covs)) if res else 0.0}
@@ -214,8 +226,10 @@ def main() -> None:
     def summary(c):
         bt = best_trials(c["path"])
         c["score"] = float(np.mean([t["score"] for t in bt.values()]))
+        ce = [t["colour_err"] for t in bt.values() if np.isfinite(t["colour_err"])]
+        c["colour_err"] = float(np.mean(ce)) if ce else float("nan")
         c["per_video"] = {str(e): {"rel": t["rel"], "score": t["score"], "median_iou": t["median_iou"],
-                                   "median_coverage": t["median_coverage"],
+                                   "median_coverage": t["median_coverage"], "colour_err": t["colour_err"],
                                    "tried": {f"{r:.3f}": round(tt["score"], 4) for (p, ee, r), tt in sorted(trials.items())
                                              if p == c["path"] and ee == e}}
                           for e, t in bt.items()}
@@ -223,7 +237,7 @@ def main() -> None:
 
     def fmt(c):
         return ", ".join(f"ep{k} x{p['rel']:.2f} IoU {p['median_iou']:.2f} cov {p['median_coverage']:.2f}"
-                         for k, p in c["per_video"].items()) + f" -> score {c['score']:.2f}"
+                         for k, p in c["per_video"].items()) + f" -> score {c['score']:.3f}, colour error {c['colour_err']:.3f}"
 
     # ---- pass 1: every candidate, coarse sizes, every video
     cands = []
@@ -248,6 +262,18 @@ def main() -> None:
     # as the differences it would decide. The review page flags these objects.
     win = max(finalists, key=lambda c: c["score"])
     near_tie = [c for c in finalists if c is not win and c["score"] >= win["score"] - args.tie]
+    # ... except by texture: among near-ties, a mesh whose texture clearly matches the photos better wins (foam block:
+    # the outline winner had green paint on the dirt sides, colour error 0.093 vs 0.071; tracking leans on colour to
+    # tell a cube's orientations apart). Equal colours (iron: 0.127 vs 0.127) leave the outline winner.
+    better = [c for c in near_tie if np.isfinite(c["colour_err"]) and np.isfinite(win["colour_err"])
+              and c["colour_err"] <= win["colour_err"] - args.colour_margin]
+    if better:
+        alt = min(better, key=lambda c: c["colour_err"])
+        log(f"  near-tie broken by texture: {alt['candidate']} (video frame {alt['video_frame']}) of ep "
+            f"{alt['source_episode']} colour error {alt['colour_err']:.3f} vs {win['colour_err']:.3f} of the outline "
+            f"winner {win['candidate']} of ep {win['source_episode']} (scores {alt['score']:.3f} vs {win['score']:.3f})")
+        near_tie = [c for c in near_tie if c is not alt] + [win]
+        win = alt
     if near_tie:
         log(f"  NEAR-TIE (within {args.tie}): chosen {win['candidate']} (video frame {win['video_frame']}) of ep "
             f"{win['source_episode']} {win['score']:.3f} vs " + ", ".join(

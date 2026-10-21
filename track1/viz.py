@@ -22,3 +22,16 @@ def contrast_bg(colors) -> tuple[int, int, int]:
     if abs(lum(bg) - lum(mean)) < 90:
         bg = np.array([235.0, 235, 235]) if lum(mean) < 128 else np.array([25.0, 25, 25])
     return tuple(int(round(v)) for v in np.clip(bg, 0, 255))
+
+
+def colour_err(rgb, col, both) -> float:
+    """Mean absolute colour difference (0-1) between a photo and a textured render on the pixels `both`, after
+    matching their mean brightness (lighting / exposure of a frame must not count; hue and pattern do)."""
+    a = np.asarray(rgb, float)[both] / 255.0
+    b = np.asarray(col, float)[both]
+    if b.size and b.max() > 1.0:
+        b = b / 255.0
+    if a.size == 0:
+        return float("nan")
+    b = b * (a.mean() / max(b.mean(), 1e-6))
+    return float(np.abs(a - b).mean())
