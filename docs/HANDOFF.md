@@ -131,7 +131,7 @@ and up to date**, and the review pages reuse unchanged sheets.
   3rd of 3 in its own video. Hence the top-2 rule. Validation of that run: IoU 0.78–0.81, coverage 0.94,
   depth 1.5–2.6 cm. 5e took 32 min + 3 min validation. Single-frame fits still flip the pan (upside down /
   handle mirrored) on some frames — orientation is stage 6's job. Compare sheet:
-  `logs/stages/05e_object/review/pan_meshes_compare.png`.
+  `logs/analysis/stage5/pan_meshes_compare.png`.
 * Naming: `cand_<N>` folders use the LOCAL frame index of each video, so different videos have different
   meshes with the same name (ep 13 and ep 14 both have a `cand_000301`). Sheets and logs show
   "cand_<N> = video frame <N + frame_offset>".
