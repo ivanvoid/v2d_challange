@@ -148,6 +148,15 @@ and up to date**, and the review pages reuse unchanged sheets.
   finalists within 0.03 as a **near-tie** (in `<object>.json` and on the review page). Every object has one, so
   the gallery is the check. Next step if needed: an "essential part" check (is the handle opening visible
   where the photo shows it?), as suggested in `review/stage5_fix_suggestions.md`.
+* **Texture tie-break (5e):** among near-ties, a mesh whose rendered texture matches the photos clearly better
+  (colour error lower by >= 0.01 after matching brightness; per frame the best of the orientations that fit
+  the outline about equally) wins. Foam block: the outline winner (ep 15, video frame 147) had green paint on
+  the dirt sides (0.093) vs the correct ep 16 frame 89 (0.071); a cube fits its outline in many orientations,
+  so tracking relies on the texture. Iron: 0.127 vs 0.127, so the outline winner stays.
+* **Thin objects in validation (hoop):** outlines compared with a 3 px tolerance (a ~4 px rim halves the plain
+  IoU of a perfect fit), and the mesh is accepted if it matches on >= 3 of 8 held-out frames: a ring fitted
+  from scratch on one frame often lands flat on the floor or tilted (its pixels carry the wall's depth), which
+  is a pose problem for stage 6, not a mesh problem. Ep 0 passes outright, ep 1/2 with 3 and 4 frames.
 * View diversity: on a static object every view looks alike, so the mask-shape filter left ep 16 with 1
   candidate of 80 clear frames (also ep 26: 1, ep 15 and 28: 2). `stage5_pick.py` now relaxes the shape
   limit 0.8 -> 0.9 -> off when fewer than 3 views remain (frames stay 30 apart). Ep 15, 16, 26 got the extra
