@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
-"""Stage 6 — object pose for every frame: multi-anchor bidirectional tracking + global selection.
+"""Stage 6 — object pose for every frame: anchors, bidirectional tracking, re-finding a lost object,
+global selection.
 
-1. anchors   smart-sampled where the object is clearly visible and still:
+1. anchors   fixed windows of --anchor_every frames; per window the eligible frame of best quality
                quality q = visible (mask area / median, capped at 1) * (1 - body occlusion)^2
                            * sharpness^0.3 (Laplacian variance in the object box, relative)
                            * stillness (exp(-mask_change / 0.1))
                eligible  = mask area >= --min_anchor_vis x median, not touching the image border,
-                           body occlusion <= 0.25
-             spacing follows the motion: the timeline is cut into stretches whose summed mask
-             change (1 - IoU of consecutive masks) reaches --motion_budget (stretch length kept in
-             [--min_gap, --max_gap]); each stretch's best eligible frame is an anchor, plus the
-             stage-5 reference frame. Static stretches -> few anchors, fast motion -> many.
-             Each anchor is registered independently; distinct orientations (>= 45 deg apart)
-             within --hyp_margin of the best fit are kept (max --max_hyps).
-2. tracking  every anchor hypothesis is tracked FORWARD to the next anchor and BACKWARD to the
-             previous one (first/last anchors also run to the video ends). So most frames get
-             candidates from both sides; nothing is tracked further than one anchor gap.
-             Low-fit frames are re-tracked once with more refiner iterations (5 -> 10).
-3. selection Viterbi over all frames: choose one candidate per frame minimising
-                 sum_f  -w_f * fit_f(candidate)                      (w_f = visibility weight)
-               + sum_f  rot_change/--deg_per_unit + trans_change_cm/--cm_per_unit (+ --flip_cost if > 60 deg)
-             i.e. the best-fitting sequence that does not jump or flip.
-             Continuous smoothing over the whole sequence (pose graph) is stage 7.
+                           body occlusion <= --max_anchor_occ
+             (no anchor in a window without a frame of quality >= --min_anchor_quality) + the stage-5e
+             reference frame. Each anchor is registered from scratch; distinct orientations (>= 45 deg
+             apart) within --hyp_margin of the best fit are kept (max --max_hyps).
+2. tracking  every anchor hypothesis is tracked FORWARD to the next anchor and BACKWARD to the previous
+             one (first/last anchors also run to the video ends); a chain arriving at an anchor is handed
+             over (continued) unless the anchor has an orientation within --handover_deg. A low-fit frame
+             is re-tracked once from the previous pose with more refiner iterations (a local retry only).
+3. re-find   a visible stretch of >= --lost_after frames where NO candidate fits (IoU < --iou_ok) means
+             the object was lost there: the best frame of the stretch is registered from scratch (a new
+             anchor) and tracked both ways across the stretch; up to --recover_rounds rounds.
+4. selection Viterbi over all frames: one candidate per frame minimising
+                 sum_f -w_f * fit_f  +  rot_change / --deg_per_unit  +  trans_change / (--size_per_unit x size)
+                                     (+ --flip_cost if > 60 deg in one frame)
+             fit = IoU - colour error / 255 - --depth_weight * min(depth error / --depth_scale_cm, 1)
+               IoU      pixels where the body is IN FRONT of the object (MoGe depth) do not count against a
+                        pose: a handle under the holding hand is not penalised, one in empty space is
+               depth    median |rendered - MoGe depth| on valid depth pixels only; not used for "thin"
+                        objects (a hoop rim carries the depth of the wall behind it)
+             translation cost relative to the object's size (a 1 m hoop vs a 0.2 m roller).
+States per frame: observed (IoU >= --iou_ok), tracked (worse, but within --lost_after frames of an
+observed frame), lost (further from any observed frame), occluded (mask smaller than --vis_frac of its
+median: hidden, or missing in segmentation).
 Writes out/episode_XXXXXX/poses/<frame:06d>.json (object-to-camera, original mesh frame) and
-track/states.json (per frame: chosen source, fit, best alternative, steps; anchors).
+track/states.json (per frame: state, chosen source, fit, best alternative; anchors incl. re-found ones).
 
     /opt/venvs/foundation_pose/bin/python track1/stage6_track.py --episode 28 --out_root out \
         --weights weights --debug_log logs/stages/06_track/episode_000028.debug.log
@@ -60,10 +68,6 @@ def main() -> None:
     ap.add_argument("--out_root", required=True)
     ap.add_argument("--weights", required=True)
     ap.add_argument("--debug_log", required=True)
-    ap.add_argument("--motion_budget", type=float, default=2.0, help="summed mask change per anchor stretch")
-    ap.add_argument("--min_gap", type=int, default=15)
-    ap.add_argument("--max_gap", type=int, default=120)
-    ap.add_argument("--max_anchors", type=int, default=16)
     ap.add_argument("--min_anchor_vis", type=float, default=0.6, help="anchor mask area >= this x median")
     ap.add_argument("--hyp_margin", type=float, default=0.10)
     ap.add_argument("--max_hyps", type=int, default=3)
@@ -78,7 +82,13 @@ def main() -> None:
     ap.add_argument("--register_iter", type=int, default=10)
     ap.add_argument("--iou_ok", type=float, default=0.5)
     ap.add_argument("--deg_per_unit", type=float, default=30.0, help="rotation change costing one unit of fit")
-    ap.add_argument("--cm_per_unit", type=float, default=10.0, help="translation change costing one unit of fit")
+    ap.add_argument("--size_per_unit", type=float, default=0.25,
+                    help="translation change costing one unit of fit, as a fraction of the object's size")
+    ap.add_argument("--depth_weight", type=float, default=0.2, help="fit penalty for depth disagreement (max)")
+    ap.add_argument("--depth_scale_cm", type=float, default=10.0, help="depth error giving the full penalty")
+    ap.add_argument("--lost_after", type=int, default=30,
+                    help="frames without any fitting candidate before the object counts as lost (re-find)")
+    ap.add_argument("--recover_rounds", type=int, default=2)
     ap.add_argument("--flip_cost", type=float, default=3.0, help="extra cost for a > 60 deg change in one frame")
     ap.add_argument("--vis_frac", type=float, default=0.15)
     ap.add_argument("--handover_deg", type=float, default=45.0,
@@ -116,6 +126,15 @@ def main() -> None:
     est = tr._est
     tfc = est.get_tf_to_centered_mesh().cpu().numpy()
     tfc_inv = np.linalg.inv(tfc)
+    import paths
+    obj = next(json.loads(l) for l in open(paths.META) if json.loads(l)["episode_index"] == args.episode)["object"]
+    thin = bool(json.load(open(paths.PRIORS)).get(obj, {}).get("thin"))
+    mv = np.array([[float(x) for x in l.split()[1:4]] for l in open(os.path.join(W, "mesh_scaled.obj"))
+                   if l.startswith("v ")])
+    size_cm = float(np.ptp(mv, axis=0).max()) * 100
+    cm_unit = args.size_per_unit * size_cm
+    log(f"{ep}: {obj}, size {size_cm:.0f} cm -> translation {cm_unit:.1f} cm costs one unit; depth term "
+        f"{'off (thin object)' if thin else f'on (weight {args.depth_weight})'}")
 
     # ---- per-frame quality: visibility, border, body occlusion, sharpness, stillness
     import cv2
@@ -123,6 +142,7 @@ def main() -> None:
     bv, bf = body["pred_vertices"].numpy(), body["faces"].numpy()
     areas, border = np.zeros(n), np.zeros(n, bool)
     occ, sharp, change = np.zeros(n), np.zeros(n), np.zeros(n)
+    occluder = [None] * n          # packed bits: body pixels IN FRONT of the object, around it (even frames)
     m_prev = None
     for f in range(n):
         m = np.asarray(Image.open(os.path.join(W, "masks", "1", f"{f:06d}.png"))) > 0
@@ -148,13 +168,19 @@ def main() -> None:
             pad = int(0.15 * max(x1 - x0, y1 - y0)) + 5
             reg = np.zeros(m.shape, bool)
             reg[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad] = True
-            front = (sil > 0) & reg & (d < float(np.median(d[m])) - 0.05) & ~m
+            in_front = (sil > 0) & (d < float(np.median(d[m])) - 0.05) & ~m
+            front = in_front & reg
             occ[f] = front.sum() / (m.sum() + front.sum())
+            pad2 = int(0.5 * max(x1 - x0, y1 - y0)) + 10       # wider: a hidden handle can stick out further
+            reg2 = np.zeros(m.shape, bool)
+            reg2[max(0, y0 - pad2):y1 + pad2, max(0, x0 - pad2):x1 + pad2] = True
+            occluder[f] = np.packbits(in_front & reg2)
         else:
             occ[f] = -1
     for f in range(n):                                     # odd frames: copy the previous even frame
         if occ[f] < 0:
             occ[f] = occ[f - 1]
+            occluder[f] = occluder[f - 1]
     med_area = float(np.median(areas[areas > 0])) if (areas > 0).any() else 1.0
     vis = areas / med_area
     smax = np.percentile(sharp[sharp > 0], 95) if (sharp > 0).any() else 1.0
@@ -171,7 +197,9 @@ def main() -> None:
         return rgb, DepthImage.load(os.path.join(W, "depth", f"{f:06d}.png")), \
             Mask.load(os.path.join(W, "masks", "1", f"{f:06d}.png"))
 
-    def score(P_list, rgb, depth, mask):
+    HW = (intr.height, intr.width)
+
+    def score(P_list, rgb, depth, mask, f=None):
         Pc = np.stack([P @ tfc_inv for P in P_list])
         with torch.no_grad():
             col, dep, _ = nvdiffrast_render(K, intr.height, intr.width,
@@ -179,14 +207,21 @@ def main() -> None:
                                             glctx=tr._glctx, mesh_tensors=est.mesh_tensors, get_normal=False)
         col, dep = col.cpu().numpy(), dep.cpu().numpy()
         m, d = mask.mask.astype(bool), depth.depth
+        hid = (np.unpackbits(occluder[f])[:HW[0] * HW[1]].reshape(HW).astype(bool)
+               if f is not None and occluder[f] is not None else None)
         out = []
         for i in range(len(P_list)):
             sil = dep[i] > 0.001
             both = sil & m
-            iou = float(both.sum() / max((sil | m).sum(), 1))
+            seen = sil & ~hid if hid is not None else sil    # model pixels behind the body are not judged
+            iou = float(both.sum() / max((seen | m).sum(), 1))
             ce = float(np.abs(col[i][both] * 255 - rgb[both]).mean()) if both.any() else 255.0
-            dcm = float(np.median(np.abs(dep[i][both] - d[both])) * 100) if (both & (d > 0)).any() else None
-            out.append({"iou": iou, "colour_err": ce, "depth_cm": dcm, "fit": iou - ce / 255.0})
+            valid = both & (d > 0)
+            dcm = float(np.median(np.abs(dep[i][valid] - d[valid])) * 100) if valid.sum() >= 30 else None
+            fit = iou - ce / 255.0
+            if dcm is not None and not thin:
+                fit -= args.depth_weight * min(dcm / args.depth_scale_cm, 1.0)
+            out.append({"iou": iou, "colour_err": ce, "depth_cm": dcm, "fit": fit})
         return out
 
     # ---- 1. anchors: fixed windows (v2). Per window:
@@ -210,10 +245,10 @@ def main() -> None:
     log(f"{ep}: {len(anchor_frames)} anchor candidates (windows of {args.anchor_every} frames, select by "
         f"{args.anchor_select}" + (f"; no anchor in windows starting at video frames {skipped}" if skipped else "")
         + ")")
-    anchors = []
-    for a in sorted(anchor_frames):
+    def register_anchor(a, why="anchor"):
+        """Register from scratch on frame a; distinct orientations within --hyp_margin of the best fit."""
         rgb, depth, mask = load(a)
-        with to_debug(args.debug_log, f"register anchor {a}"):
+        with to_debug(args.debug_log, f"register {why} {a}"):
             tr.register(V2dImage(data=rgb), depth, mask, intr, iteration=args.register_iter)
         distinct = []
         for h in est.poses[:40].cpu().numpy():
@@ -222,18 +257,24 @@ def main() -> None:
                 distinct.append(P)
             if len(distinct) == 6:
                 break
-        sc = score(distinct, rgb, depth, mask)
+        sc = score(distinct, rgb, depth, mask, a)
         best = max(s_["fit"] for s_ in sc)
         keep = sorted([i for i in range(len(distinct)) if sc[i]["fit"] >= best - args.hyp_margin],
                       key=lambda i: -sc[i]["fit"])[:args.max_hyps]
         if sc[keep[0]]["iou"] < 0.4:
-            log(f"  anchor video frame {a + off}: best IoU {sc[keep[0]]['iou']:.2f} too low, dropped")
-            continue
-        anchors.append({"frame": a, "hyps": [{"P": distinct[i], **sc[i]} for i in keep]})
+            log(f"  {why} video frame {a + off}: best IoU {sc[keep[0]]['iou']:.2f} too low, dropped")
+            return None
         fits_txt = ", ".join("%.2f" % sc[i]["fit"] for i in keep)
-        log(f"  anchor video frame {a + off}: quality {quality[a]:.2f} (visible {vis[a]:.2f}, occluded "
+        log(f"  {why} video frame {a + off}: quality {quality[a]:.2f} (visible {vis[a]:.2f}, occluded "
             f"{occ[a]:.2f}, mask change {change[a]:.3f}); {len(distinct)} orientations, kept {len(keep)} "
             f"(fits {fits_txt}; IoU {sc[keep[0]]['iou']:.2f})")
+        return {"frame": a, "hyps": [{"P": distinct[i], **sc[i]} for i in keep], "refound": why != "anchor"}
+
+    anchors = []
+    for a in sorted(anchor_frames):
+        r = register_anchor(a)
+        if r is not None:
+            anchors.append(r)
     if not anchors:
         raise SystemExit(f"{ep}: no usable anchor")
     log(f"{ep}: {len(anchors)} anchors at video frames {[a['frame'] + off for a in anchors]} "
@@ -259,12 +300,12 @@ def main() -> None:
             rgb, depth, mask = load(f)
             with to_debug(args.debug_log, f"track {f}"):
                 P = tr.track_one(V2dImage(data=rgb), depth, intr, iteration=args.track_iter).to_matrix()
-            s = score([P], rgb, depth, mask)[0]
+            s = score([P], rgb, depth, mask, f)[0]
             if s["iou"] < args.iou_ok and vis[f] >= args.vis_frac:
                 tr.reset_to_pose(Transform3d.from_matrix(P_prev))
                 with to_debug(args.debug_log, f"retrack {f}"):
                     P2 = tr.track_one(V2dImage(data=rgb), depth, intr, iteration=args.retrack_iter).to_matrix()
-                s2 = score([P2], rgb, depth, mask)[0]
+                s2 = score([P2], rgb, depth, mask, f)[0]
                 if s2["fit"] > s["fit"]:
                     P, s = P2, s2
                 tr.reset_to_pose(Transform3d.from_matrix(P))
@@ -304,7 +345,53 @@ def main() -> None:
                 f"{f' ({handed} handed over from the previous anchor)' if handed else ''} — "
                 f"{n_steps} tracked so far, {n_steps / (time.time() - t1):.1f} frames/s")
 
-    # ---- 3. global selection (Viterbi)
+    # ---- 3. re-find a lost object: a visible stretch where NO candidate fits gets a fresh registration
+    def lost_runs():
+        bad = [vis[f] >= args.vis_frac and max(c["iou"] for c in cands[f]) < args.iou_ok for f in range(n)]
+        runs, f = [], 0
+        while f < n:
+            if bad[f]:
+                g = f
+                while g + 1 < n and bad[g + 1]:
+                    g += 1
+                if g - f + 1 >= args.lost_after:
+                    runs.append((f, g))
+                f = g + 1
+            else:
+                f += 1
+        return runs
+
+    tried = set()
+    for rnd in range(args.recover_rounds):
+        runs = lost_runs()
+        if not runs:
+            break
+        log(f"{ep}: re-find round {rnd + 1}: no candidate fits on {len(runs)} stretch(es): "
+            + ", ".join(f"video frames {a + off}-{b + off}" for a, b in runs))
+        for a0, b0 in runs:
+            pool = [f for f in range(a0, b0 + 1) if eligible[f] and f not in tried] or \
+                   [f for f in range(a0, b0 + 1) if vis[f] >= 0.3 and f not in tried]
+            if not pool:
+                log(f"  video frames {a0 + off}-{b0 + off}: no frame clear enough to re-find the object")
+                continue
+            f0 = max(pool, key=lambda f: quality[f])
+            tried.add(f0)
+            r = register_anchor(f0, why="re-find")
+            if r is None:
+                continue
+            anchors.append(r)
+            for hi, h in enumerate(r["hyps"]):
+                cands[f0].append({"P": h["P"], **{k: h[k] for k in ("iou", "colour_err", "depth_cm", "fit")},
+                                  "src": f"refind {f0 + off}#{hi}"})
+                run_chain(h["P"], range(f0 + 1, min(n, b0 + 1 + args.lost_after)), f"refind fwd {f0 + off}#{hi}")
+                run_chain(h["P"], range(f0 - 1, max(-1, a0 - 1 - args.lost_after), -1), f"refind bwd {f0 + off}#{hi}")
+    left = lost_runs()
+    if args.recover_rounds:
+        log(f"{ep}: after re-finding: {sum(b - a + 1 for a, b in left)} visible frames still without a fitting "
+            f"candidate" + (f" ({', '.join(f'{a + off}-{b + off}' for a, b in left)})" if left else ""))
+    anchors.sort(key=lambda a: a["frame"])
+
+    # ---- 4. global selection (Viterbi)
     w = np.clip(vis / 0.5, 0.05, 1.0)
     cost = [np.array([-w[0] * c["fit"] for c in cands[0]])]
     back = [None]
@@ -315,7 +402,7 @@ def main() -> None:
             for j, c in enumerate(cur):
                 r = rot_deg(p["P"], c["P"])
                 tcm = float(np.linalg.norm(p["P"][:3, 3] - c["P"][:3, 3]) * 100)
-                T[i, j] = r / args.deg_per_unit + tcm / args.cm_per_unit + (args.flip_cost if r > 60 else 0.0)
+                T[i, j] = r / args.deg_per_unit + tcm / cm_unit + (args.flip_cost if r > 60 else 0.0)
         tot = cost[-1][:, None] + T
         back.append(tot.argmin(0))
         cost.append(tot.min(0) - w[f] * np.array([c["fit"] for c in cur]))
@@ -324,9 +411,22 @@ def main() -> None:
         path.append(int(back[f][path[-1]]))
     path = path[::-1]
 
+    # states: observed / tracked (within --lost_after frames of an observed frame) / lost / occluded
+    chosen = [cands[f][path[f]] for f in range(n)]
+    observed = np.array([vis[f] >= args.vis_frac and chosen[f]["iou"] >= args.iou_ok for f in range(n)])
+    since = np.full(n, 10 ** 6)                       # frames to the nearest observed frame
+    last = -10 ** 6
+    for f in range(n):
+        last = f if observed[f] else last
+        since[f] = f - last
+    last = 10 ** 6
+    for f in range(n - 1, -1, -1):
+        last = f if observed[f] else last
+        since[f] = min(since[f], last - f)
+
     rows, P_prev, overrides, switches, last_src = [], None, 0, 0, None
     for f in range(n):
-        c = cands[f][path[f]]
+        c = chosen[f]
         P = c["P"]
         best_alt = max(cands[f], key=lambda x: x["fit"])
         if best_alt["fit"] > c["fit"] + 0.05:
@@ -335,7 +435,8 @@ def main() -> None:
         if last_src is not None and src_track.split(" ")[-1] != last_src.split(" ")[-1]:
             switches += 1
         last_src = src_track
-        state = "occluded" if vis[f] < args.vis_frac else ("observed" if c["iou"] >= args.iou_ok else "uncertain")
+        state = ("occluded" if vis[f] < args.vis_frac else "observed" if observed[f]
+                 else "tracked" if since[f] <= args.lost_after else "lost")
         rows.append({"frame": f, "video_frame": f + off, "state": state, "src": c["src"],
                      "n_candidates": len(cands[f]), "iou": c["iou"], "colour_err": c["colour_err"],
                      "depth_cm": c["depth_cm"], "fit": c["fit"], "best_alt_fit": best_alt["fit"],
@@ -343,18 +444,26 @@ def main() -> None:
                      "quality": float(quality[f]), "occlusion": float(occ[f]), "mask_change": float(change[f]),
                      "rot_step": 0.0 if P_prev is None else rot_deg(P, P_prev),
                      "trans_step_cm": 0.0 if P_prev is None else float(np.linalg.norm(P[:3, 3] - P_prev[:3, 3]) * 100),
-                     "recovery": None})
+                     "frames_from_observed": int(min(since[f], 10 ** 6)),
+                     "recovery": c["src"] if c["src"].startswith("refind") else None})
         Transform3d.from_matrix(P).save(os.path.join(poses_dir, f"{f:06d}.json"))
         P_prev = P
-    json.dump({"episode": args.episode, "reference_frame": ref, "params": {**vars(args), "max_rot_step": 45.0},
-               "anchors": [{"frame": a["frame"], "video_frame": a["frame"] + off,
+    json.dump({"episode": args.episode, "reference_frame": ref, "object": obj, "size_cm": size_cm, "thin": thin,
+               "params": {**vars(args), "max_rot_step": 45.0, "cm_unit": cm_unit},
+               "anchors": [{"frame": a["frame"], "video_frame": a["frame"] + off, "refound": a.get("refound", False),
                             "fits": [h["fit"] for h in a["hyps"]]} for a in anchors],
                "frames": rows}, open(os.path.join(track_dir, "states.json"), "w"), indent=1)
     ious = np.array([r["iou"] for r in rows])
     big = sum(r["rot_step"] > 45 for r in rows)
-    states = {s: sum(r["state"] == s for r in rows) for s in ("observed", "uncertain", "occluded")}
+    states = {s: sum(r["state"] == s for r in rows) for s in ("observed", "tracked", "lost", "occluded")}
+    run = longest = 0
+    for r in rows:
+        run = run + 1 if r["state"] == "lost" else 0
+        longest = max(longest, run)
+    jumps = sum(r["trans_step_cm"] > 0.5 * size_cm for r in rows)
     log(f"{ep}: stage 6 OK — {n} poses, {n_steps} tracking steps in {time.time() - t0:.0f}s; IoU median "
-        f"{np.median(ious):.2f}, frames IoU<0.5: {(ious < 0.5).sum()}; {states}; rotation steps > 45 deg: {big}; "
+        f"{np.median(ious):.2f}, frames IoU<0.5: {(ious < 0.5).sum()}; {states}; longest lost stretch {longest}; "
+        f"rotation steps > 45 deg: {big}; translation steps > half the object size: {jumps}; "
         f"global selection kept a worse-fitting candidate on {overrides} frames (continuity), source switches {switches}")
 
 

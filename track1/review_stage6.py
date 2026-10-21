@@ -5,16 +5,15 @@ Sheet (review/episode_XXXXXX_track.png):
   8 frames across the scored span + the worst-fit frame: image | textured mesh at the tracked
   pose (CPU render), SAM2 mask outline in green, state + IoU in the title
   plots over the scored span: IoU and colour error, rotation step per frame (deg), translation
-  (x/y/z, m), and the per-frame state as a coloured band (observed / recovered / uncertain /
-  jump / occluded)
+  (x/y/z, m), and the per-frame state as a coloured band (observed / tracked / lost / occluded)
 
 Checks:
   poses for every frame                                   FAIL
   median IoU over the scored span >= 0.6                  WARN
   frames with IoU < 0.4 <= 10 %                           WARN
   rotation steps > 45 deg in the output <= 0              WARN  (unexplained flips)
-  recoveries accepted <= 5 % of frames                    WARN
-  uncertain + jump frames <= 15 %                         WARN
+  translation steps > half the object size <= 0           WARN
+  lost frames (no fitting pose nearby) <= 5 %             WARN  (+ longest lost stretch, re-found anchors)
 
     /opt/venvs/sam3d_body/bin/python track1/review_stage6.py --episodes 6 8 17 26 28 \
         --out_root out --stage_dir logs/stages/06_track
@@ -34,8 +33,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import trimesh  # noqa: E402
 
-STATE_COL = {"observed": "#2ca02c", "recovered": "#1f77b4", "uncertain": "#ff7f0e", "jump": "#d62728",
-             "occluded": "#7f7f7f"}
+STATE_COL = {"observed": "#2ca02c", "tracked": "#ff7f0e", "lost": "#d62728", "occluded": "#7f7f7f",
+             "uncertain": "#ff7f0e"}          # 'uncertain': older runs
 
 
 def quat_to_R(q):
@@ -91,7 +90,14 @@ def review_episode(W: str, review_dir: str) -> dict:
     vf = np.array([r["video_frame"] for r in sel])
     T = np.array([load_pose(os.path.join(W, "poses", f"{r['frame']:06d}.json"))[:3, 3] for r in sel])
     n_poses = len([x for x in os.listdir(os.path.join(W, "poses")) if x.endswith(".json")])
-    bad = sum(s in ("uncertain", "jump") for s in states)
+    lost = sum(s in ("lost", "uncertain") for s in states)
+    run = longest = 0
+    for s_ in states:
+        run = run + 1 if s_ in ("lost", "uncertain") else 0
+        longest = max(longest, run)
+    size_cm = st.get("size_cm") or float(np.ptp(v, axis=0).max()) * 100
+    ts = np.array([r.get("trans_step_cm", 0.0) for r in sel])
+    refound = [a["video_frame"] for a in st.get("anchors", []) if a.get("refound")]
     anchors_vf = [a["video_frame"] for a in st.get("anchors", [])]
     overr = sum(1 for r in sel if r.get("best_alt_fit") is not None and r["best_alt_fit"] > r["fit"] + 0.05)
 
@@ -106,7 +112,11 @@ def review_episode(W: str, review_dir: str) -> dict:
     add("anchors", len(anchors_vf) >= 2, f"{len(anchors_vf)} anchors at video frames {anchors_vf}")
     add("continuity overrides", overr <= 0.2 * len(sel),
         f"{overr} frames kept a worse-fitting candidate for continuity (a better-fitting one jumped)")
-    add("tracking confident", bad <= 0.15 * len(sel), f"{100 * bad / len(sel):.0f}% uncertain or jump frames")
+    add("not lost", lost <= 0.05 * len(sel),
+        f"{lost} lost frames ({100 * lost / len(sel):.0f}%; no fitting pose within {params.get('lost_after', 30)} "
+        f"frames), longest stretch {longest}" + (f"; object re-found at video frames {refound}" if refound else ""))
+    add("no translation jumps", (ts > 0.5 * size_cm).sum() == 0,
+        f"{(ts > 0.5 * size_cm).sum()} frame steps > half the object size ({0.5 * size_cm:.0f} cm); max {ts.max():.0f} cm")
     status = "FAIL" if any(c["status"] == "FAIL" for c in checks) else \
              "WARN" if any(c["status"] == "WARN" for c in checks) else "PASS"
 

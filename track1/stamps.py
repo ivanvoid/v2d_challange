@@ -64,7 +64,7 @@ STAGES = {
                inputs=["OBJECT_VIDEOS"],
                outputs=["mesh_scaled.obj", "material.mtl", "material_0.png", "mesh/object_choice.json",
                         "mesh/validate.json"]),
-    "6": dict(code=["stage6_track.py"], extra=[], deps=["1", "2", "4", "5e"], inputs=["OVERRIDES"],
+    "6": dict(code=["stage6_track.py"], extra=[T1 / "object_priors.json"], deps=["1", "2", "4", "5e"], inputs=["OVERRIDES"],
               outputs=["poses", "track/states.json"]),
     "7": dict(code=["stage7_smooth.py"], extra=[], deps=["6"], inputs=[],
               outputs=["poses_smoothed", "track/smooth.json"]),
