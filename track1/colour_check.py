@@ -96,8 +96,11 @@ def main() -> None:
                 iou = [(dep[i] & m).sum() / max((dep[i] | m).sum(), 1) for i in range(len(distinct))]
                 b = int(np.argmax(iou))
                 ious.append(float(iou[b]))
-                both = dep[b] & m
-                cerrs.append(colour_err(d["rgb"], col[b].cpu().numpy(), both) if both.sum() > 50 else np.nan)
+                # among poses that fit the outline about as well (a cube fits in many orientations), the one whose
+                # texture matches the photo best: "can this texture match the photo at an outline-fitting pose"
+                ce = [colour_err(d["rgb"], col[i].cpu().numpy(), dep[i] & m) if (dep[i] & m).sum() > 50 else np.nan
+                      for i in range(len(distinct)) if iou[i] >= iou[b] - 0.03]
+                cerrs.append(float(np.nanmin(ce)) if np.isfinite(ce).any() else np.nan)
             out.append(f"ep{e} x{rel:.2f} IoU {np.median(ious):.2f} colour err {np.nanmedian(cerrs):.3f}")
         print(f"{name} of ep {se}: " + " | ".join(out) + f"  -> mean colour err "
               f"{np.mean([float(s.split('colour err ')[1]) for s in out]):.3f}", flush=True)

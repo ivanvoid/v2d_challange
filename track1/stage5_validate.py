@@ -54,7 +54,18 @@ def main() -> None:
     ap.add_argument("--n_frames", type=int, default=8)
     ap.add_argument("--min_iou", type=float, default=0.5)
     ap.add_argument("--min_cov", type=float, default=0.6)
+    ap.add_argument("--thin_tol_px", type=int, default=3,
+                    help='objects with "thin": true (hula hoop): outlines compared with this pixel tolerance')
     args = ap.parse_args()
+    import cv2
+    import paths
+    obj = next(json.loads(l) for l in open(paths.META) if json.loads(l)["episode_index"] == args.episode)["object"]
+    thin = bool(json.load(open(paths.PRIORS)).get(obj, {}).get("thin"))
+    # a hoop rim is ~4 px wide: a 1-2 px offset halves the plain IoU of a perfect fit, so a thin object is judged
+    # with both outlines widened by the tolerance (plain IoU is still reported)
+    ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * args.thin_tol_px + 1,) * 2)
+    def widen(x):
+        return cv2.dilate(x.astype(np.uint8), ker) > 0
 
     ep = f"episode_{args.episode:06d}"
     W = os.path.join(os.path.abspath(args.out_root), ep)
@@ -97,8 +108,13 @@ def main() -> None:
             b = int(np.argmax(ious))
             sil = dep[b] > 0.001
             both = sil & obs & (depth.depth > 0)
-            per.append({"frame": f, "video_frame": f + off, "iou": float(ious[b]),
-                        "coverage": float((sil & obs).sum() / max(obs.sum(), 1)),
+            plain_iou, plain_cov = float(ious[b]), float((sil & obs).sum() / max(obs.sum(), 1))
+            if thin:
+                sw, ow = widen(sil), widen(obs)
+                t_iou = float((sw & ow).sum() / max((sw | ow).sum(), 1))
+                t_cov = float((obs & sw).sum() / max(obs.sum(), 1))
+            per.append({"frame": f, "video_frame": f + off, "iou": t_iou if thin else plain_iou,
+                        "coverage": t_cov if thin else plain_cov, "plain_iou": plain_iou, "plain_coverage": plain_cov,
                         "depth_cm": float(np.median(np.abs(dep[b][both] - depth.depth[both])) * 100) if both.any() else None,
                         "_render": col[b].cpu().numpy(), "_sil": sil, "_obs": obs, "_rgb": rgb})
     if not per:
@@ -110,7 +126,6 @@ def main() -> None:
     accepted = med_iou >= args.min_iou and med_cov >= args.min_cov
 
     # sheet: per held-out frame, image with the mask (green) and the rendered mesh (blue) outlines + the render
-    import cv2
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
     small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
     tiles = []
@@ -129,15 +144,17 @@ def main() -> None:
         t = Image.new("RGB", (720, 410), (20, 20, 20))
         t.paste(crop, (0, 50)); t.paste(rend, (360, 50))
         bad = p["iou"] < args.min_iou or p["coverage"] < args.min_cov
+        plain = " (plain %.2f)" % p["plain_iou"] if thin else ""
         dtxt = "n/a" if p["depth_cm"] is None else f"{p['depth_cm']:.1f} cm"
-        ImageDraw.Draw(t).text((8, 8), f"video frame {p['video_frame']}: IoU {p['iou']:.2f}  coverage {p['coverage']:.2f}  "
+        ImageDraw.Draw(t).text((8, 8), f"video frame {p['video_frame']}: IoU {p['iou']:.2f}{plain}  coverage {p['coverage']:.2f}  "
                                          f"depth {dtxt}", fill=(255, 80, 80) if bad else (230, 230, 230), font=small)
         tiles.append(t)
     cols = 4
     rows = (len(tiles) + cols - 1) // cols
     sheet = Image.new("RGB", (720 * cols, 410 * rows + 80), (0, 0, 0))
+    tol_txt = " (thin object, %d px tolerance)" % args.thin_tol_px if thin else ""
     ImageDraw.Draw(sheet).text((10, 8), f"{ep} - FINAL model validation on held-out clear frames - "
-                                        f"{'ACCEPTED' if accepted else 'REJECTED'}: median IoU {med_iou:.2f} "
+                                        f"{'ACCEPTED' if accepted else 'REJECTED'}: median IoU{tol_txt} {med_iou:.2f} "
                                         f"(>= {args.min_iou}), coverage {med_cov:.2f} (>= {args.min_cov}), depth "
                                         f"{'n/a' if med_d is None else f'{med_d:.1f} cm'}",
                                fill=(120, 255, 120) if accepted else (255, 90, 90), font=font)
@@ -151,14 +168,14 @@ def main() -> None:
 
     # the final acceptance summary of THIS exported mesh (sha1 binds it to the file stage 6 will track)
     import hashlib
-    json.dump({"episode": args.episode, "mesh": mesh_path,
+    json.dump({"episode": args.episode, "mesh": mesh_path, "thin_tolerance_px": args.thin_tol_px if thin else 0,
                "mesh_sha1": hashlib.sha1(open(mesh_path, "rb").read()).hexdigest(),
                "extent_m": oc.get("extent_m"), "rel_scale": oc.get("rel_scale"), "mesh_source": oc, "accepted": accepted,
                "median_iou": med_iou, "median_coverage": med_cov, "median_depth_cm": med_d,
                "thresholds": {"min_iou": args.min_iou, "min_cov": args.min_cov},
                "frames": [{k: v for k, v in p.items() if not k.startswith("_")} for p in per],
                "sheet": os.path.basename(args.sheet)}, open(os.path.join(W, "mesh", "validate.json"), "w"), indent=1)
-    log(f"{ep}: final model on {len(per)} held-out clear frames — median IoU {med_iou:.2f}, coverage {med_cov:.2f}, "
+    log(f"{ep}: final model on {len(per)} held-out clear frames — median IoU{tol_txt} {med_iou:.2f}, coverage {med_cov:.2f}, "
         f"depth {'n/a' if med_d is None else f'{med_d:.1f} cm'} -> {'ACCEPTED' if accepted else 'REJECTED'}")
     if not accepted:
         raise SystemExit(3)
