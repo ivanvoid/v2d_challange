@@ -18,7 +18,12 @@ review pages: `$V2D_DATA/logs/stages/<NN_stage>/index.html`. Times below are the
 * The image viewer can show an outdated file: copy images to view into `logs/stages/_viewer/`, never into a
   stage's `review/` folder.
 
-## 1. Running now: 5e rerun for all 10 objects (tmux `s5e_all`)
+## 1. DONE (04:21): 5e rerun for all 10 objects — all 30 videos accepted
+Final choices: pan cand_000301 ep 13 (unchanged), bowl cand_000454 ep 5 (texture), hoop cand_000220 ep 0
+(unchanged), foam block cand_000103 ep 16 (frame 143, correct texture), pink roll cand_000250 ep 21 (texture),
+iron cand_000517 ep 7 (unchanged, blob), desk cand_000334 ep 10, roller cand_000172 ep 20, cart cand_000250
+ep 29 (all unchanged), stool cand_000070 ep 26 (frame 145, an added view; good). The rest of this section is
+the record of the run.
 `FROM=5e TO=5e GPUS='0 2' ./run_rest.sh`, started 01:38, ~25 min per object, both GPUs: expect it done
 around 04:15. Log: `/tmp/opencode/s5e_all.log`, per object `logs/stages/05e_object/<object>.log`.
 Why: 5e got a new rule — near-tied finalists (within 0.03) are decided by texture agreement with the photos

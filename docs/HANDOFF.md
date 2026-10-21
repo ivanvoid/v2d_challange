@@ -253,14 +253,14 @@ git -C v2d_challange commit -am "..." && git -C v2d_challange push
 Lesson of P1: place the object where the hands touch it on scored frames, not by the body's scale.
 Local PEN is calibrated (Kaggle / local ≈ 1.045).
 
-### v2 rerun status per object (stage 5e; stage 6 not run yet)
+### v2 rerun status per object (stage 5e finished 2026-10-21 04:21, all 30 accepted; stage 6 not run yet)
 Final ids, scores and galleries: `logs/stages/05e_object/index.html`. Validation = the exported mesh fitted on 8
 held-out frames per video; compared with v1's final meshes on the same frames, v2 is equal or better on 9 of 10.
 
 | Object | Videos | Mesh (gallery review) | Validation | Open issue |
 |---|---|---|---|---|
-| red bowl, white desk, cart, stool, pink foam roll | — | good | accepted | — |
-| foam block | 15–17 | good shape; texture: rerun with the colour tie-break | accepted | check the new choice |
+| red bowl, white desk, cart, stool, pink foam roll | — | good (bowl ep 5 frame 534 and pink roll ep 21 frame 330 chosen by the texture tie-break; stool ep 26 frame 145, an added view) | accepted | — |
+| foam block | 15–17 | ep 16 frame 143 (a view added by the relaxed diversity rule): correct texture, clean cube | accepted | — |
 | pan | 12–14 | clean pan with straight handle (top-2 rule) | accepted | orientation (upside down / handle side): stage 6 |
 | paint roller | 18–20 | roller with frame and handle | accepted | handle is thin: outline score barely sees it |
 | iron | 6–8 | handle-less blob chosen (near-tie with a clean iron) | accepted | needs an "essential part" check |
