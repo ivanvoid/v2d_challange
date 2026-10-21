@@ -1,4 +1,8 @@
-# Handoff — V2D Challenge Track 1 pipeline (state as of 2026-10-16; stages 3 and 5 updated 2026-10-20)
+# Handoff — V2D Challenge Track 1 pipeline (state as of 2026-10-21: full rerun "v2", stages 1–5e done, stage 6 next)
+
+v1 results (the baseline submission) are kept in `out_v1/`, `logs/stages_v1/`, `submission_v1/`; the rerun
+writes `out/`, `logs/stages/`. Each stage was rerun after reading the reviews in `$V2D_DATA/review/stageN*.md`
+and choosing fixes; hardest episodes first, then all.
 
 This document is everything needed to continue the work: what the pipeline does, how to run it,
 what we learned the hard way, where the results stand, and what to do next.
@@ -60,10 +64,10 @@ and up to date**, and the review pages reuse unchanged sheets.
 
 | # | Stage | Code | Key outputs in `out/episode_XXXXXX/` | Time / video |
 |---|---|---|---|---|
-| 1 | trim to scored span ±10, AnyCalib undistort, frames, MoGe depth + intrinsics | `stage1_prep.py` | `frames/ depth/ intrinsics_stable.json track1_meta.json` | ~6 min |
-| 2 | person track (detectron2) → SAM3D-Body with real intrinsics → one-identity MHR fit (kit's `mesh_to_mhr_params`, σ=2 temporal smoothing) | `run_stage.sh` stage2 + `fit_mhr.py` | `body/{bbox_track.pt,mhr_params.pt,mhr_mesh.pt,mhr_fit.npz}` | ~7 min |
+| 1 | trim to scored span ±10, AnyCalib undistort, frames, MoGe depth + intrinsics; per-frame depth-scale stabilisation (`depth_raw/` → `depth/`), static background and floor plane | `stage1_prep.py` | `frames/ depth/ depth_raw/ intrinsics_stable.json track1_meta.json background.npz floor.json` | ~6 min |
+| 2 | person tracking with masks (one detectron2 pass, own tracking with fragment joining, actor choice, acceptance check) → SAM3D-Body prompted with box + person mask (body decoder) → one-identity MHR fit (kit's `mesh_to_mhr_params`, σ=2, odd-reflection edge padding) → body depth follows the stabilised MoGe slow trend (unadjusted fit kept as `mhr_fit_raw.npz`) | `stage2_track.py stage2_body.py fit_mhr.py stage2_depth.py` | `body/{person_track.json,mhr_mesh.pt,mhr_fit.npz,depth_trend.json}` | ~7 min |
 | 3 | object selection (see below), incl. a size check against the same object's other videos | `stage3_select.py` | `object_track.json select/` | 1–3 min |
-| 4 | object mask: SAM2 with boxes + negative points on the body, gap fill by re-detection, leak repair | `stage4_prompts.py stage4_mask.py sam2_box_neg.py` | `masks/1/ mask_prompts.json masks_repair.json` | 1–5 min |
+| 4 | object mask: SAM2 with boxes + negative points on the body (person masks), backward and forward passes averaged, per-frame quality classes (`mask_quality.py`), recovery gated by wrist distance, leak repair, acceptance check | `stage4_prompts.py stage4_mask.py sam2_box_neg.py mask_quality.py` | `masks/1/ masks_prob/ masks_conf.json masks_quality.json masks_repair.json` | 1–5 min |
 | 5 | **generation**: 3 diverse clear views per video → textured SAM3D meshes (all in one process) → metric scale (FoundationPose search around a mask-based initial scale) | `stage5_pick.py stage5_mesh.py sam3d_batch.py stage5_scale.py` | `mesh/candidates.json mesh/cand_*/` | ~15 min |
 | 5c | **per-video selection**: each candidate fitted on frames it was not built from, (IoU + coverage) / 2 | `stage5_check.py` | `mesh/choice.json mesh/cand_*/check.json` | ~2 min |
 | 5e | **one mesh per object** (see below) + **validation** of the exported mesh on held-out frames | `stage5_object.py stage5_validate.py` | `mesh_scaled.obj mesh/object_choice.json mesh/validate.json` | ~30 min / object |
@@ -169,6 +173,7 @@ cd $V2D_DATA                                   # old paths are symlinks into the
 EPISODES="6 8 17 26 28" ./run_stage.sh 3       # one stage, chosen episodes (default: the debug set)
 ./run_stage_2gpu.sh 6 "0 2" "0-29"             # one stage split over GPUs 0 and 2 (tmux s6gpu0/s6gpu2)
 WORKERS="0 2" EPISODES="0-29" ./run_stage_pool.sh 5   # SAM3D generation, 1 worker per GPU
+WORKERS="0 0 0 2 2 2" EPISODES="0-29" ./run_stage_pool.sh 2   # stages 1-2: 3 workers per GPU; stage 4: ~6 GB each
 GPUS="0 2" FROM=5 ./run_rest.sh                # stage 5 (missing) -> 5c -> 5e -> 6 -> 7 -> 8 on all 30
 python3 track1/stamps.py status                # what is up to date per episode (1 2 3 4 5 5c 5e 6 7 8)
 ```
@@ -205,7 +210,19 @@ git -C v2d_challange commit -am "..." && git -C v2d_challange push
 * **FoundationPose's own mask-IoU check is offset** (renders the centred mesh with the un-centred pose);
   our scoring uses `pose @ inv(tf_to_center)`.
 * **Texture matters for tracking** (FoundationPose compares colour); texture baking is on in stage 5.
-  But colour must **not** decide the mesh choice (a wrong texture would win) — 5e uses IoU only.
+  Colour does not rank meshes (a wrong texture must not beat a better shape); it only breaks outline
+  near-ties, and only when it is clearly better (foam block: green paint on the dirt sides).
+* **The outline score cannot see 3D shape.** The same mesh at x0.99 vs x1.00 differs by up to 0.02; every
+  object's two 5e finalists are within 0.03. Iron: a handle-less blob beat a clean iron 0.90 vs 0.87. Look at
+  the 05e gallery; 3D agreement between candidates and colour did not separate the iron (too noisy / equal).
+* **A view rule must not confuse "seen at an angle" with "partly hidden".** The 'complete object' extent term
+  dropped the iron's best view (lying flat it looks short); it is off for the iron (`view_extent: false`).
+* **Thin objects need tolerant measures.** A hoop rim is ~4 px wide: a 1–2 px offset halves the IoU of a
+  perfect fit; single-frame ring fits also land flat on the floor (wall depth on the rim pixels).
+* **Stopping `run_stage.sh` mid-stage leaves the old outputs archived** (`out/<ep>/_archive/<stage>/`);
+  move them back (and `stamps.py adopt`) if the old result should stay.
+* **`pgrep -f` / `pkill -f` match their own command line** (and a tmux command that contains the
+  pattern); wait on a PID or a tmux session instead.
 * **SAM3D builds small objects 2–3× too small**; stage 5 starts the scale search from a mask-based
   estimate, otherwise the search hits its upper bound.
 * **Frame numbering**: folder/file names use the LOCAL index inside the trimmed clip; review sheets show
@@ -227,7 +244,29 @@ git -C v2d_challange commit -am "..." && git -C v2d_challange push
 | ACC-O (cm/frame²) | 0.127 | 9 | 0.071 | – |
 | PEN (cm) | **0.1007** | 20 / 20 | 0.0000 | 0.0042 |
 
-### Per object (stage 5e choice, stage 6 median mask IoU, stage 8 hand–object gap)
+### Kaggle submissions (details in `docs/EXPERIMENTS.md`)
+| # | Change | CD-H | CD-O | ACC-H | ACC-O | PEN |
+|---|---|---|---|---|---|---|
+| 0 baseline (v1) | — | 15.716 | 37.420 | 0.1745 | 0.1274 | 0.1007 |
+| 1 p1_global | 8 episodes' object scale "none" → "global" | 15.716 | **43.294** (worse) | 0.1745 | 0.1306 | 0.0889 |
+
+Lesson of P1: place the object where the hands touch it on scored frames, not by the body's scale.
+Local PEN is calibrated (Kaggle / local ≈ 1.045).
+
+### v2 rerun status per object (stage 5e; stage 6 not run yet)
+Final ids, scores and galleries: `logs/stages/05e_object/index.html`. Validation = the exported mesh fitted on 8
+held-out frames per video; compared with v1's final meshes on the same frames, v2 is equal or better on 9 of 10.
+
+| Object | Videos | Mesh (gallery review) | Validation | Open issue |
+|---|---|---|---|---|
+| red bowl, white desk, cart, stool, pink foam roll | — | good | accepted | — |
+| foam block | 15–17 | good shape; texture: rerun with the colour tie-break | accepted | check the new choice |
+| pan | 12–14 | clean pan with straight handle (top-2 rule) | accepted | orientation (upside down / handle side): stage 6 |
+| paint roller | 18–20 | roller with frame and handle | accepted | handle is thin: outline score barely sees it |
+| iron | 6–8 | handle-less blob chosen (near-tie with a clean iron) | accepted | needs an "essential part" check |
+| hula hoop | 0–2 | clean rings | accepted as thin object (ep 1/2: 3–4 of 8 frames fit) | single-frame ring poses fail: stage 6 |
+
+### v1 per object (baseline run; stage 5e choice, stage 6 median mask IoU, stage 8 hand–object gap)
 
 | Object | Videos | Mesh source (video frame) | Tracking IoU | Hand gap | Status |
 |---|---|---|---|---|---|
@@ -252,8 +291,8 @@ deeper than MoGe on the body's own pixels (MoGe/body ratio 0.87–0.95); stage 8
 | Round | Changes | Targets | Compute |
 |---|---|---|---|
 | **R1** | (a) **PEN**: per frame push the object off the hand points (+2 mm, smoothed, capped ~3 cm), checked with the kit's exact PEN function; (b) **mesh origin at the object centre** (ACC-O); (c) **hold the object still** when hands are far and the mask is static (ACC-O, CD-O); (d) **body root smoothing** (σ≈5 on root translation, esp. depth) + **feet on the floor plane** from MoGe (ACC-H, CD-H) | PEN, ACC-O, ACC-H | ~1 h (stages 7–8; root smoothing works on parameters directly) |
-| **R2** | force "global" scale matching for all episodes (8 episodes currently "none"): one-variable test of the body/object depth-scale question | CD-O | minutes |
-| **R3** | (a) **hula hoop as a torus**: diameter from the mask's major axis × depth (median over 3 videos), per-frame tilt from an ellipse fit (depth resolves the two-fold ambiguity), smoothed; (b) **mesh completeness** in 5e ("mask not covered" penalty) → rollers get the handle; (c) **episode 7** tracking (more anchors where lost, re-detection; fallback hold) | CD-O, ACC-O | 3–4 h on 2 GPUs |
+| **R2** | DONE (P1): force "global" scale matching for the 8 "none" episodes — CD-O worse (37.42 → 43.29). Stage 8 now places the object by hand contact on scored frames (continuous factor 0.80–1.25; written, not run yet) | CD-O | minutes |
+| **R3** | (b) DONE: coverage in 5c/5e + per-object choice (pan has its handle); (c) stage 6 re-find of a lost object built (ep 7), not run yet; (a) open: **hula hoop as a torus**: diameter from the mask's major axis × depth (median over 3 videos), per-frame tilt from an ellipse fit (depth resolves the two-fold ambiguity), smoothed; (b) **mesh completeness** in 5e ("mask not covered" penalty) → rollers get the handle; (c) **episode 7** tracking (more anchors where lost, re-detection; fallback hold) | CD-O, ACC-O | 3–4 h on 2 GPUs |
 | **R4** | ACC-H σ test (joints σ=2 vs 3); SAM3D-Body prompted with person masks (needs a SAM2 person track) and first-scored-frame robustness | ACC-H, CD-H | ~4 h |
 | **R5** | **CARI4D** (`/workspace/v2d_cari4d`, not installed: needs a container/venv + weights via a NEW `HF_TOKEN`): run on the debug set with our masks and 5e meshes; if it wins, add its joint human–object refinement after stage 8 | CD-O, PEN, CD-H | 1–2 days |
 
@@ -264,6 +303,8 @@ Speed-ups (no quality loss, see discussion): stage 6 — load frames once, score
 stage 5 — done: 5d dropped, SAM3D loaded once per video, repeated scale trials cached, generation and
 selection stamped separately, 5e tests only each video's 5c top 2 (6 meshes instead of 9, ~1/3 less 5e
 time) (still open: register once then refine per scale).
+
+### Research notes (pasted, not verified)
 
 Based on recent state-of-the-art research in 4D Human-Object Interaction (HOI) reconstruction (such as CHOIR, PHOSA, and Monocular HOI Optimization Frameworks), here is a breakdown of advanced research methods tailored specifically to address your pipeline's remaining failure points before the freeze date.   1. Contact Penetration (PEN) & Physical ConsistencyState-of-the-Art Research Insights:Contact-Aware Joint Optimization (CHOIR Framework): Rather than performing decoupled pose tracking followed by a post-hoc push, state-of-the-art pipelines use barycentric contact anchors. When hand vertices come within a threshold distance of the object, correspondence pairs are dynamically formed.   SDF-Based Loss Functions: Modern HOI approaches compute a Signed Distance Field (SDF) around the object mesh $\mathcal{O}$. For any hand vertex $v_i \in \mathcal{H}$ inside the object (where $\text{SDF}_{\mathcal{O}}(v_i) < 0$), an explicit loss term penalizes penetration:$$\mathcal{L}_{\text{pen}} = \sum_{v_i \in \mathcal{H}} \max(0, -\text{SDF}_{\mathcal{O}}(v_i))^2$$Implementation in Your Pipeline (R1 Refinement):Instead of an isotropic (+2 mm) push in Stage 8, implement a fast SDF / Surface-Normal Repulsion Step:Compute the local surface normals $\hat{n}_j$ of the closest object face for any hand vertex $v_i$ with a negative distance (or positive winding number) inside the object.Push the hand vertex outward along $\hat{n}_j$ by $d_{\text{pen}} + \delta$ (where $\delta = 2\text{ mm}$ safety margin).Smooth the resulting hand joint trajectories using a temporal Gaussian kernel ($\sigma=2$) to ensure no high-frequency jitter is introduced into ACC-H.2. Thin Topologies & Primitive Degeneracy (Hula Hoop & Paint Roller)State-of-the-Art Research Insights:Parametric Geometric Priors vs. Mesh Generation: Generic single-view mesh generation models (like SAM3D) consistently break on non-solid or high-genus topologies (e.g., rings, tori, thin handles) due to resolution limits in implicit representations. SOTA HOI literature replaces feedforward generation with parametric fitting whenever a object category exhibits strong geometric symmetry.Aspect-Ratio & Mask Coverage Penalty: Methods handling thin objects penalize missing mask coverage explicitly during mesh selection:$$\mathcal{L}_{\text{coverage}} = 1.0 - \frac{\text{Area}(\text{Rendered Mask} \cap \text{Detected Mask})}{\text{Area}(\text{Detected Mask})}$$Implementation in Your Pipeline (R3 Refinement):Hula Hoop (Videos 0–2): Completely replace SAM3D with an analytical torus model:Fit an ellipse to the 2D segmentation mask to extract the major axis $a$ (radius $R = a / 2$) and minor axis $b$.Estimate tube thickness $r$ using the mask boundaries.Resolve the 2D-to-3D normal direction tilt ambiguity using MoGe depth map gradients inside the hoop mask region.Construct an explicit parametric OBJ torus mesh. This will instantly jump your IoU from 0.43 to > 0.85.Paint Roller (Videos 18–20): In Stage 5e, incorporate a mask non-coverage penalty. If the rendered silhouette misses more than 15% of the SAM2 mask bounding box (i.e., the handle region), lower its score so a candidate containing the full handle geometry is selected.3. Object Tracking Drift & Rotational Instability (Episode 7 Iron)State-of-the-Art Research Insights:Bidirectional Keyframe Hand-Over with Confidence Thresholding: In monocular RGB tracking, specular highlights or rapid turns cause visual trackers (like FoundationPose) to accumulate orientation drift. SOTA trackers enforce a forward-backward cycle consistency check:$$\Delta T = \Vert{} T_{t \to t+1} \cdot T_{t+1 \to t} - \mathbf{I} \Vert{}_F$$If $\Delta T$ exceeds a preset threshold, the frame is flagged as tracking failure.Kinematic Contact Holding: When the human hand is moving, but its speed relative to the object is near zero, the object trajectory is constrained to be rigidly attached to the hand:$$T_{\text{object}}^{(t)} = T_{\text{hand}}^{(t)} \cdot T_{\text{rel}}$$Implementation in Your Pipeline (R3 & R6 Refinement):Dynamic Anchor Insertion for Ep 7: Automatically trigger dense anchors (every 10–15 frames instead of 60) when the tracking confidence score or mask IoU drops below 0.65.Contact Holding / Stationarity Lock:When hand-object distance is small ($<3\text{ cm}$) and hand velocity is high, lock object pose to the hand transform $T_{\text{rel}}$.When hands are far ($>20\text{ cm}$) and the mask is static across consecutive frames, set object velocity to zero to eliminate fake acceleration noise (ACC-O).4. Origin Centering & Alignment (ACC-O Optimization)Research Recommendation for R1:In Track 1 metrics, object acceleration (ACC-O) evaluates the 2nd-difference error of the mesh origin. If the origin of your CAD model is offset from its center of mass, pure rotations introduce artificial translation vectors, severely degrading your ACC-O score.Action: Before running Stage 6 tracking, re-center all generated meshes so that their coordinate origin $(0,0,0)$ lies exactly at the bounding box centroid or center of mass:$$\mathbf{x}_{\text{centered}} = \mathbf{x} - \frac{1}{N} \sum_{i=1}^{N} \mathbf{x}_i$$Update your pose transformation matrices accordingly: $T_{\text{new}} = T_{\text{old}} \cdot T_{\text{center}}^{-1}$.Recommended Execution PriorityPriorityAction ItemAffected MetricEstimated TimeExpected Gain1Re-center mesh origins to geometry centroidsACC-O~15 minsHigh drop in ACC-O error2Add Surface Normal/SDF Hand RepulsionPEN~1 hourPEN $\to 0.00x$ cm3Parametric Torus fitting for Hula HoopCD-O, ACC-O~2 hoursEp 0–2 IoU jumps from $0.43 \to >0.85$4Stationarity/Contact-holding constraintsACC-O, CD-O~1 hourRemoves jitter during static phases5Dense anchor recovery for Ep 7CD-O~2 hoursRecovers ~290 lost tracking framesFor a broader conceptual understanding of contact-aware tracking methods in human-object interactions, you can review this research video.
 
