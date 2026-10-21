@@ -16,7 +16,8 @@ Every 3rd frame of the contact span (scored_first..scored_last) is measured:
   score = sqrt(area / max_area) * min(1, extent)^2 * (1 - occlusion)^2 * (sharpness / max_sharpness)^0.3
              (the extent factor is left out for objects with "view_extent": false in object_priors.json: iron)
 
-Candidates are taken greedily by score, each at least --min_sep frames from the others AND with a
+Candidates are taken greedily by score (if fewer than --n_candidates differ enough in shape, the shape limit
+is relaxed 0.9 -> off, frames stay --min_sep apart), each at least --min_sep frames from the others AND with a
 clearly different mask shape (IoU < --max_shape_iou between the masks cropped to their box and resized
 to 64x64): different views of the object, not the same pose twice.
 Writes out/episode_XXXXXX/mesh/candidates.json (per-frame table + chosen frames).
@@ -125,12 +126,24 @@ def main() -> None:
                       (1 - r["occlusion"]) ** 2 * (r["sharpness"] / smax) ** 0.3) if r["eligible"] else 0.0
     def shape_iou(a, b):
         return float((a["_shape"] & b["_shape"]).sum() / max((a["_shape"] | b["_shape"]).sum(), 1))
+    # greedy by score; views must differ (mask shape IoU below the limit). A static object looks the same in every
+    # frame (ep 16: 1 view from 80 clear frames), so if too few remain the limit is relaxed step by step
+    # (frames stay --min_sep apart): more independent reconstructions beat a single one.
     chosen = []
-    for r in sorted(pool, key=lambda r: -r["score"]):
-        if all(abs(r["frame"] - c["frame"]) >= args.min_sep and shape_iou(r, c) < args.max_shape_iou for c in chosen):
-            chosen.append(r)
+    for lim in (args.max_shape_iou, 0.9, 1.01):
+        for r in sorted(pool, key=lambda r: -r["score"]):
+            if len(chosen) == args.n_candidates:
+                break
+            if r in chosen:
+                continue
+            if all(abs(r["frame"] - c["frame"]) >= args.min_sep and shape_iou(r, c) < lim for c in chosen):
+                chosen.append(r)
+                r["diversity_limit"] = lim
         if len(chosen) == args.n_candidates:
             break
+        log(f"  only {len(chosen)} view(s) with mask shape IoU < {lim:.2f} to each other"
+            + ("; relaxing" if lim < 1.0 else f" even with no shape limit ({len(pool)} eligible frames, "
+                                              f"{args.min_sep} apart)"))
     for r in rows:
         r.pop("_shape", None)
     os.makedirs(os.path.join(W, "mesh"), exist_ok=True)

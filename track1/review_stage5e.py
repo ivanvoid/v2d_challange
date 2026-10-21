@@ -95,9 +95,13 @@ def main() -> None:
             vp = os.path.join(args.out_root, f"episode_{e:06d}", "mesh", "validate.json")
             val[e] = json.load(open(vp)) if os.path.exists(vp) else None
         n_ok = sum(1 for v in val.values() if v and v["accepted"])
-        status = "PASS" if n_ok == len(vids) else "FAIL"
-        col = "#4c4" if status == "PASS" else "#f55"
         vtxt = []
+        status = "PASS" if n_ok == len(vids) else "FAIL"
+        if r.get("near_tie"):       # information: the outline score could not separate these (see the gallery)
+            vtxt.insert(0, "near-tie: " + ", ".join(f"{t['candidate']} (video frame {t['video_frame']}) of ep "
+                                                    f"{t['source_episode']} {t['score']:.3f}" for t in r["near_tie"])
+                        + f" vs chosen {ch['score']:.3f} — compare them in the gallery")
+        col = {"PASS": "#4c4", "WARN": "#fb3", "FAIL": "#f55"}[status]
         for e, v in val.items():
             if v is None:
                 vtxt.append(f"ep {e}: not validated")

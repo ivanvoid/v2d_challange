@@ -132,6 +132,27 @@ and up to date**, and the review pages reuse unchanged sheets.
   meshes with the same name (ep 13 and ep 14 both have a `cand_000301`). Sheets and logs show
   "cand_<N> = video frame <N + frame_offset>".
 
+### Stage 5 results of the 2026-10-20 rerun, and what was learned
+* 5e accepted 9 of 10 objects (27 videos); the hoop is rejected on all 3 videos (thin ring: IoU 0.30–0.48).
+* Same validation (same held-out frames) run on v1's final meshes: the new meshes are equal or better on 9 of
+  10 objects (mean IoU change +0.02 to +0.03 for pan, iron, cart, bowl, pink roll, roller; stool −0.01, mainly ep
+  26 which had a single candidate; hoop equally bad). Coverage is higher almost everywhere. This metric does
+  not see 3D shape.
+* Galleries (`logs/stages/05e_object/review/<object>_gallery.png`): good choices for bowl, pan, desk, roller,
+  cart, stool, foam block, pink roll. **Iron: 5e chose a handle-less blob (ep 7, video frame 597; v1 chose the
+  same) over a clean iron (ep 6, frame 723): 0.90 vs 0.87.** The same mesh at x0.99 vs x1.00 already differs by
+  up to 0.02, so this is a tie the outline score cannot break.
+* Tried and NOT used as tie-breaks (both are in `track1/` as diagnostics): 3D agreement with the object's other
+  candidates (`shape_consensus.py`: noise ±0.005, as large as the iron's gap 0.125 vs 0.132) and colour
+  agreement of the textured render with the photo (`colour_check.py`: 0.127 vs 0.127). 5e now records
+  finalists within 0.03 as a **near-tie** (in `<object>.json` and on the review page). Every object has one, so
+  the gallery is the check. Next step if needed: an "essential part" check (is the handle opening visible
+  where the photo shows it?), as suggested in `review/stage5_fix_suggestions.md`.
+* View diversity: on a static object every view looks alike, so the mask-shape filter left ep 16 with 1
+  candidate of 80 clear frames (also ep 26: 1, ep 15 and 28: 2). `stage5_pick.py` now relaxes the shape
+  limit 0.8 -> 0.9 -> off when fewer than 3 views remain (frames stay 30 apart). Ep 15, 16, 26 got the extra
+  views without regenerating their existing meshes; ep 28 has no further view (its 16 clear frames are close).
+
 ### Running
 ```bash
 export V2D_DATA=/local-data/ivan/v2d

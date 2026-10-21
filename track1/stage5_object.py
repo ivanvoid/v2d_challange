@@ -17,7 +17,9 @@ the object is tested on frames of ALL its videos:
   pass 1     every tested candidate, sizes --coarse (x0.9 / 1.0 / 1.1) in every video, so a good shape whose
              first size was a bit off is not dropped; candidate score = mean over videos of its best trial
   pass 2     the best --finalists: sizes --fine around each video's best pass-1 size (pass-1 trials reused)
-  choice     the candidate with the best score after pass 2; each video keeps its own best size
+  choice     the candidate with the best score after pass 2; each video keeps its own best size. Finalists
+             within --tie (0.03, about the score's own noise) are reported as a near-tie and flagged on the
+             review page (the outline score cannot see 3D shape: iron, a handle-less blob 0.90 vs the clean iron 0.87)
              (each video has its own depth scale; stage 8 maps everything to the body)
 The winning trial's per-frame IoU, coverage, poses and render tiles are kept and used for every report and
 for the tracking reference frame (nothing is refitted for the sheet).
@@ -89,6 +91,8 @@ def main() -> None:
     ap.add_argument("--fine", type=float, nargs="+", default=[0.9, 0.95, 1.05, 1.1],
                     help="pass 2: factors around each video's best pass-1 size, for the finalists")
     ap.add_argument("--finalists", type=int, default=2)
+    ap.add_argument("--tie", type=float, default=0.03,
+                    help="finalists within this of the best score are reported as a near-tie (flagged for review)")
     ap.add_argument("--top_per_video", type=int, default=2,
                     help="candidates tested per video: the best by that video's own 5c check")
     ap.add_argument("--n_hyp", type=int, default=5)
@@ -238,7 +242,17 @@ def main() -> None:
         summary(c)
         c["finalist"] = True
         log(f"  pass 2 {c['candidate']} (video frame {c['video_frame']}) of ep {c['source_episode']}: {fmt(c)}")
+    # Near-ties are recorded, not resolved by a hidden rule: the outline score's own noise is about 0.02 (the same
+    # mesh at x0.99 vs x1.00) and it cannot see 3D shape (iron: a handle-less blob 0.90 vs the clean iron 0.87).
+    # A 3D-agreement tie-break (shape_consensus.py) was tried and dropped: its own noise (+-0.005) was as large
+    # as the differences it would decide. The review page flags these objects.
     win = max(finalists, key=lambda c: c["score"])
+    near_tie = [c for c in finalists if c is not win and c["score"] >= win["score"] - args.tie]
+    if near_tie:
+        log(f"  NEAR-TIE (within {args.tie}): chosen {win['candidate']} (video frame {win['video_frame']}) of ep "
+            f"{win['source_episode']} {win['score']:.3f} vs " + ", ".join(
+                f"{c['candidate']} (video frame {c['video_frame']}) of ep {c['source_episode']} {c['score']:.3f}"
+                for c in near_tie) + " — the outline score cannot separate these; check the gallery")
     win_trial = best_trials(win["path"])
 
     # ---- write the chosen mesh to every video (stage 5e is the only writer of out/<ep>/mesh_scaled.obj)
@@ -262,6 +276,8 @@ def main() -> None:
                   open(os.path.join(W, "mesh", "object_choice.json"), "w"), indent=1)
     rep = {"object": args.object, "videos": list(videos), "coarse": args.coarse, "fine": args.fine,
            "candidates": [{k: v for k, v in c.items() if k != "path"} for c in cands],
+           "tie": args.tie, "near_tie": [{"source_episode": c["source_episode"], "candidate": c["candidate"],
+                                          "video_frame": c["video_frame"], "score": c["score"]} for c in near_tie],
            "chosen": {"source_episode": win["source_episode"], "candidate": win["candidate"],
                       "rel_per_video": {str(e): t["rel"] for e, t in win_trial.items()}, "score": win["score"]},
            "seconds": round(time.time() - t0)}
