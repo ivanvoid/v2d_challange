@@ -20,6 +20,7 @@ the object translation per scored stretch (jitter, not the error).
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | 2026-10-15 | baseline | `20b2d5c` | stages 1–8 as in HANDOFF.md | 15.716 | 37.420 | 0.1745 | 0.1274 | 0.1007 | 0.0966 | 12.38 | 0.454 | 0.131 | 0.115 | `submission/track1.parquet` |
 | 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
+| 2 | 2026-10-22 | stage67_v2 | _pending commit_ | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
 
 ## Notes per experiment
 
@@ -49,3 +50,14 @@ ACC-H unchanged.** The contact signal predicted the direction; size consistency 
 * local PEN is calibrated: Kaggle / local = 1.046 here, 1.042 for the baseline
 Next: choose the object's depth scale per episode continuously (not 3 variants) by minimising the
 hand–object gap on scored frames only, and check the gain locally before submitting.
+
+**2 · stage67_v2 (local only, not yet submitted)** — a bundle, not a one-variable change: everything from stage 5e on was
+re-run (see HANDOFF.md). Local proxies vs the baseline (`eval_local.py compare logs/eval/baseline logs/eval/stage67_v2`):
+* local PEN 0.0966 -> 0.0555, median hand-object gap 12.4 -> 4.65 cm, contact 0.454 -> 0.489,
+  object steps > 10 cm per frame 0.233 -> 0, accO(self) 0.1145 -> 0.1122, accH(self) unchanged (0.131 -> 0.130)
+* worse: iron PEN ep 7 0.041 -> 0.093, ep 8 0.021 -> 0.128; foam block ep 15 0.22 -> 0.42 (ep 16/17 better); contact on
+  bowls 0.94 -> 0.57 in ep 4 (gap still < 1 cm)
+* unresolved: hula hoop (ep 0 gap 42 cm / ep 2 22 cm, tracker median IoU 0.28-0.39), paint roller ep 18/19 gap 11-16 cm,
+  stool ep 26 gap 15.6 cm (seated); size spread across videos of one object up to 1.28x
+* all 30 episodes packed: 740,780 rows, row ids/order equal to the sample, no non-finite values
+Local proxies are not CD-H/CD-O/ACC errors (see AGENT_HANDOFF.md section 6); only Kaggle scores say whether CD-O improved.

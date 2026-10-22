@@ -1,0 +1,5 @@
+{
+ "_comment": "Reviewed per-object decisions that replace an automatic choice. Read only by stage5_object.py (not by stages 3-5, so editing it does not invalidate their stamps).",
+ "iron": {"force_candidate": "6:cand_000643",
+          "_why": "5e outline score picked the handle-less blob (ep 7 frame 597, 0.899) over the clean iron (ep 6 frame 723, 0.871); colour agreement equal (0.127 vs 0.127)"}
+}

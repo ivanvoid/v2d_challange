@@ -138,6 +138,16 @@ def main() -> None:
         off = json.load(open(os.path.join(W, "track1_meta.json")))["frame_offset"]
         videos[e] = {"W": W, "intr": intr, "data": data, "cands": cands, "off": off}
     cand_list = [(e, cd) for e, v in videos.items() for cd in v["cands"]]
+    # object_overrides.json "force_candidate": "<episode>:cand_<N>" — a reviewed choice replaces the automatic one
+    # (the outline score cannot tell a handle-less blob from the clean object: iron). Only that candidate is tested.
+    forced = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "object_overrides.json"))).get(args.object, {}).get("force_candidate")
+    if forced:
+        fe, fc = forced.split(":")
+        fpath = os.path.join(videos[int(fe)]["W"], "mesh", fc)
+        if not os.path.exists(os.path.join(fpath, "mesh_scaled.obj")):
+            raise SystemExit(f"{args.object}: force_candidate {forced} has no mesh")
+        cand_list = [(int(fe), fpath)]
+        log(f"  {args.object}: candidate FORCED by object_overrides.json: {forced}")
     log(f"{args.object}: videos {list(videos)}, {len(cand_list)} candidate meshes, "
         f"{sum(len(v['data']) for v in videos.values())} test frames")
 
@@ -249,7 +259,7 @@ def main() -> None:
         log(f"  pass 1 {c['candidate']} (video frame {c['video_frame']}) of ep {e}: {fmt(c)}")
 
     # ---- pass 2: finalists, finer sizes around each video's best
-    finalists = sorted(cands, key=lambda c: -c["score"])[:args.finalists]
+    finalists = sorted(cands, key=lambda c: -c["score"])[:1 if forced else args.finalists]
     for c in finalists:
         run_trials(c["path"], {int(k): sorted({round(p["rel"] * f, 4) for f in args.fine})
                                for k, p in c["per_video"].items()})
@@ -302,7 +312,7 @@ def main() -> None:
                   open(os.path.join(W, "mesh", "object_choice.json"), "w"), indent=1)
     rep = {"object": args.object, "videos": list(videos), "coarse": args.coarse, "fine": args.fine,
            "candidates": [{k: v for k, v in c.items() if k != "path"} for c in cands],
-           "tie": args.tie, "near_tie": [{"source_episode": c["source_episode"], "candidate": c["candidate"],
+           "forced": forced, "tie": args.tie, "near_tie": [{"source_episode": c["source_episode"], "candidate": c["candidate"],
                                           "video_frame": c["video_frame"], "score": c["score"]} for c in near_tie],
            "chosen": {"source_episode": win["source_episode"], "candidate": win["candidate"],
                       "rel_per_video": {str(e): t["rel"] for e, t in win_trial.items()}, "score": win["score"]},

@@ -25,8 +25,8 @@ cd "$V2D_DATA"
 WORKERS=(${WORKERS:?set WORKERS, e.g. WORKERS=\"0 0 2 2\"})
 for g in "${WORKERS[@]}"; do [[ "$g" != 1 ]] || { echo "GPU 1 is not ours"; exit 2; }; done
 EPS="${EPISODES:-0-29}"
-LOG="logs/stages/run_pool_stage${STAGE}.log"
-QUEUE="logs/stages/.queue_stage${STAGE}"
+LOG="logs/stages/run_pool_stage${STAGE}${POOL_TAG:-}.log"
+QUEUE="logs/stages/.queue_stage${STAGE}${POOL_TAG:-}"   # POOL_TAG=_b: a second pool with its own queue
 mkdir -p logs/stages
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 

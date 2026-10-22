@@ -4,9 +4,14 @@
 Input: out/episode_XXXXXX/poses/<frame:06d>.json (stage 6) and track/states.json (per-frame fit).
 Output: out/episode_XXXXXX/poses_smoothed/<frame:06d>.json, track/smooth.json.
 
+0. hidden    frames stage 6 labelled occluded or lost carry no evidence (the tracker only guessed): they get
+             ~zero weight, and the local trend used below is built from the other frames only (hidden
+             frames replaced by interpolation), so a long hidden stretch cannot vote for its own garbage.
+             Their output is an interpolation between the last and next visible frames: recorded as
+             "interpolated" in track/smooth.json. --keep_hidden restores the old behaviour.
 1. outliers  a raw pose is an outlier when it disagrees with a robust local trend
              (median over +-7 frames): translation > --out_cm from the median, or rotation
-             > --out_deg from the local rotation median. Outliers get weight 0 (they are
+             > --out_deg from the local rotation median. Outliers get weight ~0 (they are
              interpolated by the smoother instead of being followed).
 2. weights   w_f = clip((IoU_f - 0.3) / 0.4, 0.05, 1)    (low-fit frames pull less)
 3. solve     translation, per axis, minimise over the whole sequence
@@ -63,6 +68,7 @@ def main() -> None:
     ap.add_argument("--out_cm", type=float, default=8.0)
     ap.add_argument("--out_deg", type=float, default=30.0)
     ap.add_argument("--window", type=int, default=15)
+    ap.add_argument("--keep_hidden", action="store_true", help="old behaviour: hidden frames keep their IoU weight")
     args = ap.parse_args()
 
     ep = f"episode_{args.episode:06d}"
@@ -79,19 +85,34 @@ def main() -> None:
             q[i] = -q[i]
     R = Rotation.from_quat(np.c_[q[:, 1:], q[:, :1]])
     iou = np.array([states[f]["iou"] for f in range(n)])
+    hidden = np.array([states[f].get("state") in ("occluded", "lost") for f in range(n)])
+    if args.keep_hidden or hidden.all() or (~hidden).sum() < 2:
+        hidden[:] = False
+
+    # trend inputs: hidden frames replaced by interpolation between the visible ones (never used as data)
+    t_fill, R_fill = t.copy(), R
+    if hidden.any():
+        good = np.flatnonzero(~hidden)
+        t_fill = np.stack([np.interp(np.arange(n), good, t[good, k]) for k in range(3)], 1)
+        R_fill = Slerp(good, R[good])(np.clip(np.arange(n), good[0], good[-1]))
+    q_fill = np.c_[quat_wxyz(R_fill)]
+    for i in range(1, n):
+        if np.dot(q_fill[i], q_fill[i - 1]) < 0:
+            q_fill[i] = -q_fill[i]
 
     # 1. outliers vs a robust local trend
-    t_med = median_filter(t, size=(args.window, 1), mode="nearest")
-    q_med = median_filter(q, size=(args.window, 1), mode="nearest")
+    t_med = median_filter(t_fill, size=(args.window, 1), mode="nearest")
+    q_med = median_filter(q_fill, size=(args.window, 1), mode="nearest")
     R_med = Rotation.from_quat(np.c_[q_med[:, 1:], q_med[:, :1]] /
                                np.linalg.norm(q_med, axis=1, keepdims=True))
     dt_cm = np.linalg.norm(t - t_med, axis=1) * 100
     dr_deg = np.degrees((R_med.inv() * R).magnitude())
-    outlier = (dt_cm > args.out_cm) | (dr_deg > args.out_deg)
+    outlier = ((dt_cm > args.out_cm) | (dr_deg > args.out_deg)) & ~hidden
 
     # 2. weights
     w = np.clip((iou - 0.3) / 0.4, 0.05, 1.0)
     w[outlier] = 1e-4
+    w[hidden] = 1e-6
 
     # 3a. translation
     t_s = smooth_series(t, w, args.lam_t)
@@ -121,16 +142,17 @@ def main() -> None:
     corr_cm = np.linalg.norm(t_s - t, axis=1) * 100
     corr_deg = np.degrees((R.inv() * R_s).magnitude())
     rs_raw, rs_s = rot_steps(R), rot_steps(R_s)
-    rep = {"episode": args.episode, "params": vars(args), "n_outliers": int(outlier.sum()),
+    rep = {"episode": args.episode, "params": vars(args), "n_outliers": int(outlier.sum()), "n_hidden_interpolated": int(hidden.sum()),
            "outlier_video_frames": [int(f + off) for f in np.flatnonzero(outlier)],
            "acc_raw_cm": float(acc(t).mean()), "acc_smooth_cm": float(acc(t_s).mean()),
            "rot_step_raw_max": float(rs_raw.max()), "rot_step_smooth_max": float(rs_s.max()),
            "corr_cm_median": float(np.median(corr_cm)), "corr_cm_max": float(corr_cm.max()),
            "corr_deg_median": float(np.median(corr_deg)), "corr_deg_max": float(corr_deg.max()),
-           "frames": [{"frame": f, "video_frame": f + off, "outlier": bool(outlier[f]), "weight": float(w[f]),
+           "frames": [{"frame": f, "video_frame": f + off, "outlier": bool(outlier[f]), "interpolated": bool(hidden[f] or outlier[f]), "hidden": bool(hidden[f]), "weight": float(w[f]),
                        "corr_cm": float(corr_cm[f]), "corr_deg": float(corr_deg[f])} for f in range(n)]}
     json.dump(rep, open(os.path.join(W, "track", "smooth.json"), "w"), indent=1)
     log(f"{ep}: stage 7 OK — {n} poses; outliers {rep['n_outliers']} {rep['outlier_video_frames'][:10]}"
+        f"; hidden frames interpolated {rep['n_hidden_interpolated']}"
         f"{'...' if rep['n_outliers'] > 10 else ''}; acceleration {rep['acc_raw_cm']:.3f} -> "
         f"{rep['acc_smooth_cm']:.3f} cm/frame^2; max rotation step {rep['rot_step_raw_max']:.0f} -> "
         f"{rep['rot_step_smooth_max']:.0f} deg; correction median {rep['corr_cm_median']:.1f} cm / "
