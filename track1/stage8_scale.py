@@ -61,6 +61,13 @@ def contact_gap_from_depth(depth: np.ndarray, surface_distance: np.ndarray) -> n
     return np.where(depth > 0, 0.0, surface_distance).min(axis=1) * 100
 
 
+def candidate_scales(k_min: float, k_max: float, k_step: float) -> np.ndarray:
+    """Explicit scale-search domain; reject configurations that cannot contain a candidate."""
+    if not (0 < k_min <= k_max and k_step > 0):
+        raise ValueError("scale grid requires 0 < k_min <= k_max and k_step > 0")
+    return np.round(np.arange(k_min, k_max + 1e-9, k_step), 4)
+
+
 def load_depth(path):
     px = cv2.imread(path, cv2.IMREAD_UNCHANGED).astype(np.float32)
     return 1.0 / np.maximum(px / 65535.0, 1e-6) - 1.0
@@ -158,7 +165,7 @@ def main() -> None:
                 "pen_cm": float(pen.mean()),
                 "score": float(np.median(excess) + args.pen_weight * pen.mean())}
 
-    ks = np.round(np.arange(args.k_min, args.k_max + 1e-9, args.k_step), 4)
+    ks = candidate_scales(args.k_min, args.k_max, args.k_step)
     table = []
     for mode in ("fixed", "follow"):
         for k in ks:

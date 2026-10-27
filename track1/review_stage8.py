@@ -3,11 +3,11 @@
 
 Sheet (review/episode_XXXXXX_final.png):
   top     the submitted body (blue) + object (orange) on 6 frames (render_results.py --frames)
-  plots   MoGe/body depth ratio over the scored span; hand-object gap per frame for each scale
-          variant (none / global / per-frame), the chosen one thick
+  plots   MoGe/body depth ratio over the scored span; current fixed/follow scale-search score
+          over k, with the chosen result and out-of-grid global/per-frame diagnostics marked
   table   the QA report (submission/reports/episode_XXXXXX.json)
 
-Checks: submission file built; QA flags; chosen variant reduces the hand-object gap;
+Checks: submission file built; QA flags; chosen variant improves the contact/PEN objective;
 gap median <= 5 cm; penetration <= 1 cm; body and object jitter <= 0.5 cm/frame^2.
 
     /opt/venvs/sam3d_body/bin/python track1/review_stage8.py --episodes 6 8 17 26 28 --out_root out \
@@ -21,6 +21,7 @@ import html
 import json
 import os
 import time
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -28,28 +29,41 @@ import matplotlib.image as mpimg  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-COLS = {"none": "tab:gray", "global": "tab:blue", "per_frame": "tab:green"}
+COLS = {"fixed": "tab:blue", "follow": "tab:green"}
+
+
+def scale_summary(sm):
+    """Normalize current and legacy stage-8 scale reports for review, without changing scoring."""
+    if "best" in sm and "legacy_variants" in sm:
+        return sm["best"], sm["legacy_variants"]["none"]
+    return sm["variants"][sm["chosen"]], sm["variants"]["none"]
 
 
 def review_episode(W, sub_dir, review_dir):
-    meta = json.load(open(os.path.join(W, "track1_meta.json")))
+    meta = json.loads((Path(W) / "track1_meta.json").read_text())
     e = meta["episode"]
     ep = f"episode_{e:06d}"
-    sm = json.load(open(os.path.join(W, "track", "scale_match.json")))
+    sm = json.loads((Path(W) / "track" / "scale_match.json").read_text())
     qa_path = os.path.join(sub_dir, "reports", f"{ep}.json")
-    qa = json.load(open(qa_path)) if os.path.exists(qa_path) else {}
+    qa = json.loads(Path(qa_path).read_text()) if os.path.exists(qa_path) else {}
     built = os.path.exists(os.path.join(sub_dir, "episodes", f"{ep}.npz"))
-    ch = sm["variants"][sm["chosen"]]
-    none = sm["variants"]["none"]
+    ch, none = scale_summary(sm)
+    contact = ch.get("contact_frac", ch.get("gap_frac_under_2cm", 0))
+    size_factor = ch.get("size_factor", ch.get("k", 1))
 
     checks = []
     def add(name, ok, detail, level="WARN"):
         checks.append({"check": name, "status": "PASS" if ok else level, "detail": detail})
+    built = built and os.path.exists(os.path.join(sub_dir, "episodes", f"{ep}_object.obj"))
     add("submission file built", built, f"{ep}.npz + _object.obj in {sub_dir}/episodes", "FAIL")
-    add("scale match helps", ch["gap_median_cm"] <= none["gap_median_cm"] + 0.5,
-        f"'{sm['chosen']}': gap {none['gap_median_cm']:.1f} -> {ch['gap_median_cm']:.1f} cm, object x{ch['size_factor']:.3f}")
+    improves = (ch["score"] <= none["score"] + 0.05) if "score" in ch and "score" in none else (
+        ch["gap_median_cm"] <= none["gap_median_cm"] + 0.5)
+    add("scale match helps", improves,
+        f"'{sm['chosen']}': gap {none['gap_median_cm']:.1f} -> {ch['gap_median_cm']:.1f} cm, "
+        f"PEN {none.get('pen_cm', float('nan')):.3f} -> {ch.get('pen_cm', float('nan')):.3f} cm, "
+        f"object x{size_factor:.3f}")
     add("hands touch the object", ch["gap_median_cm"] <= 5, f"median hand-object gap {ch['gap_median_cm']:.1f} cm, "
-        f"{100 * ch['gap_frac_under_2cm']:.0f}% of frames < 2 cm")
+        f"{100 * contact:.0f}% of frames < 2 cm")
     if qa:
         add("penetration", qa.get("pen_cm", 0) <= 1.0, f"{qa.get('pen_cm', float('nan')):.3f} cm")
         add("body jitter", qa.get("acc_h_self_cm", 0) <= 0.5, f"{qa.get('acc_h_self_cm', float('nan')):.3f} cm/frame^2")
@@ -71,11 +85,28 @@ def review_episode(W, sub_dir, review_dir):
     ax.axhline(1 / sm["s_global"], color="tab:blue", ls="--", label="median (global)")
     ax.legend(fontsize=9); ax.set_title("MoGe depth / body depth on the body's pixels")
     ax = fig.add_subplot(gs[1, 1])
-    for k, v in sm["variants"].items():
-        ax.plot(sm["eval_video_frames"], v["gaps"], color=COLS[k], lw=2.5 if k == sm["chosen"] else 1,
-                label=f"{k}: median {v['gap_median_cm']:.1f} cm" + ("  (chosen)" if k == sm["chosen"] else ""))
+    if "table" in sm:
+        for mode, color in COLS.items():
+            rows = sorted((r for r in sm["table"] if r["mode"] == mode), key=lambda r: r["k"])
+            if rows:
+                ax.plot([r["k"] for r in rows], [r["score"] for r in rows], color=color, marker=".",
+                        label=f"{mode} search")
+        ax.scatter([ch["k"]], [ch["score"]], color="red", s=85, zorder=5,
+                   label=f"chosen {sm['chosen']}: gap {ch['gap_median_cm']:.1f} cm, PEN {ch['pen_cm']:.3f} cm")
+        for mode in ("global", "per_frame"):
+            diagnostic = sm["legacy_variants"].get(mode)
+            if diagnostic:
+                ax.scatter([diagnostic["k"]], [diagnostic["score"]], marker="x", s=60,
+                           label=f"{mode} diagnostic (outside search if x is off-grid)")
+        ax.set_xlabel("object position/size factor k")
+        ax.set_ylabel("contact + penetration objective (lower is better)")
+        ax.set_title("Stage 8 search — boundary choices may exclude better diagnostic scales")
+    else:
+        for k, v in sm["variants"].items():
+            ax.plot(sm["eval_video_frames"], v["gaps"], lw=2.5 if k == sm["chosen"] else 1,
+                    label=f"{k}: median {v['gap_median_cm']:.1f} cm")
+        ax.set_title("hand-object gap (cm) over evaluated video frames")
     ax.set_yscale("symlog", linthresh=1); ax.legend(fontsize=9)
-    ax.set_title("hand-object gap (cm) — closest MHR hand vertex to the object surface")
     ax = fig.add_subplot(gs[2, :]); ax.axis("off")
     keys = ["acc_h_self_cm", "acc_o_self_cm", "pen_cm", "contact_gap_median_cm", "body_vs_moge_dz_cm",
             "object_vs_moge_dz_cm", "obj_iou_mean", "body_in_bbox", "object_scale", "object_extent_m", "flags"]
@@ -109,14 +140,16 @@ def main():
             continue
         chk_path = os.path.join(args.stage_dir, f"episode_{e:06d}.checks.json")
         key_out = os.path.join(args.sub_dir, "reports", f"episode_{e:06d}.json")
+        scale_path = os.path.join(W, "track", "scale_match.json")
         reuse_ok = (os.path.exists(chk_path) and os.path.exists(key_out)
-                    and os.path.getmtime(chk_path) > os.path.getmtime(key_out)
-                    and os.path.exists(os.path.join(review, json.load(open(chk_path)).get("sheet", "-"))))
+                    and os.path.getmtime(chk_path) > max(os.path.getmtime(key_out), os.path.getmtime(__file__),
+                                                         os.path.getmtime(scale_path))
+                    and os.path.exists(os.path.join(review, json.loads(Path(chk_path).read_text()).get("sheet", "-"))))
         if reuse_ok:                      # sheet already up to date: reuse it
-            results.append(json.load(open(chk_path)))
+            results.append(json.loads(Path(chk_path).read_text()))
             continue
         r = review_episode(W, args.sub_dir, review)
-        json.dump(r, open(os.path.join(args.stage_dir, f"episode_{e:06d}.checks.json"), "w"), indent=1)
+        (Path(args.stage_dir) / f"episode_{e:06d}.checks.json").write_text(json.dumps(r, indent=1))
         results.append(r)
         print(f"episode {e:3d}: {r['status']:4s}  " + "; ".join(
             f"{c['check']}: {c['detail']}" for c in r["checks"] if c["status"] != "PASS"))
@@ -139,7 +172,7 @@ def main():
             out.append(f"<p style='color:#999'>sheet made at {made}</p>"
                        f"<a href='review/{r['sheet']}'><img src='review/{r['sheet']}'></a>")
     out.append("</body></html>")
-    open(os.path.join(args.stage_dir, "index.html"), "w", encoding="utf-8").write("\n".join(out))
+    (Path(args.stage_dir) / "index.html").write_text("\n".join(out), encoding="utf-8")
     print(f"wrote {os.path.join(args.stage_dir, 'index.html')}")
 
 
