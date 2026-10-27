@@ -86,6 +86,25 @@ A shape-aware mask can prevent incorrect diagnostics, but cannot alone solve
 that 3D ambiguity. Do not publish a next hoop submission without new image,
 depth/support or temporal pose evidence that survives holdout checks.
 
+## Held-hoop episode-1 anchor pilot (isolated; mask and geometry unchanged)
+
+In episode 1 the hoop is **held throughout** (user-provided prior). Default
+stage-6 quality anchor selection yielded only two anchors, at video frames
+141 and 460, and skipped five 60-frame windows because body occlusion was
+high or quality fell below 0.3. On exact scored frames, median object IoU
+is 0.355 and lost share is 32.8%. Its visible mask is usually a partial arc,
+NOT the filled disk observed only in episode 0, so a generic hole mask repair
+is wrong here.
+
+An isolated `--anchor_select vis` stage-6 run using the **same masks, camera,
+body and ring mesh** is logged at `experiments/hoop_vis_v1/stage6.log`. The
+predeclared gate in `track1/held_hoop_gate.py` requires lost scored share
+down at least 10 percentage points, median scored-frame IoU no worse than
+0.02, and bounded new rotation/translation jumps. A passing gate still
+needs isolated stages 7–8, packed proxies, overlay review and physical size
+validation before assembling an episode-1-only full-file candidate. The
+experiment is not a submission or a claim of metric improvement.
+
 **Provenance:** user-provided physical priors, local images, public scorer and
 control proxies; no organizer reference poses/meshes were available. Production
 `out/`, `submission/`, baseline Parquets and the official scorer were not edited.
