@@ -20,7 +20,7 @@ the object translation per scored stretch (jitter, not the error).
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | 2026-10-15 | baseline | `20b2d5c` | stages 1–8 as in HANDOFF.md | 15.716 | 37.420 | 0.1745 | 0.1274 | 0.1007 | 0.0966 | 12.38 | 0.454 | 0.131 | 0.115 | `submission/track1.parquet` |
 | 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
-| 2 | 2026-10-22 | stage67_v2 | _pending commit_ | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
+| 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
 
 ## Notes per experiment
 
@@ -61,3 +61,30 @@ re-run (see HANDOFF.md). Local proxies vs the baseline (`eval_local.py compare l
   stool ep 26 gap 15.6 cm (seated); size spread across videos of one object up to 1.28x
 * all 30 episodes packed: 740,780 rows, row ids/order equal to the sample, no non-finite values
 Local proxies are not CD-H/CD-O/ACC errors (see AGENT_HANDOFF.md section 6); only Kaggle scores say whether CD-O improved.
+
+## Beta models (local only, not submitted) — `run_beta.sh`, branch `beta-models`
+
+Candidates: Video Depth Anything depth (`BETA_DEPTH=vda`), TRELLIS.2 / Hunyuan3D-2 meshes (`BETA_MESH`), CoTracker3
+pose refinement (`BETA_TRACK=cotracker`). Run on the iron episodes 6 7 8 only.
+
+**Compare against the control `logs/eval/beta/prodnow`** (current `submission/episodes`, i.e. experiment 2 = stage67_v2,
+all 30 episodes), NOT against `logs/eval/baseline`: that one is experiment 0 (Oct 15), and `run_beta.sh eval` still
+compares with it by default (set `BETA_BASELINE=logs/eval/beta/prodnow`). Against the stale baseline CoTracker looked like a
+big win (gap 12.4 -> 0.1 cm); that was the pipeline changes since experiment 0, not the model. Also `eval_local.py compare` prints
+the mean over each run's own episodes, so its last line is not comparable when the runs cover different episode sets.
+
+Mean over episodes 6 7 8 (iron):
+
+| run | gap cm | contact | PEN | accO | object size m |
+|---|---|---|---|---|---|
+| exp 0 baseline (Oct 15) | 18.08 | 0.316 | 0.0455 | 0.0969 | 0.305 |
+| prodnow = exp 2 | 0.00 | 0.704 | 0.0924 | 0.1000 | 0.285 |
+| warp (CoTracker3) | 0.10 | 0.695 | 0.0839 | 0.1234 | 0.285 |
+| ember (Hunyuan3D-2 meshes) | 1.63 | 0.548 | 0.0896 | 0.1142 | 0.390 |
+
+* CoTracker3: reprojection error of the refined poses drops (1.99 -> 1.21, 1.88 -> 1.08, 3.68 -> 1.60 px), but no proxy improves
+  clearly over exp 2 (PEN -9 %, accO +23 % worse). No evidence for including it.
+* Hunyuan3D-2: real 3D but lumpy, oversized meshes (0.35-0.44 m; iron prior 0.18-0.40); worse than exp 2 on episodes 6 and 7.
+* TRELLIS.2: flat sheets (thickness 0.2-5 % of width) for the iron (47 x 82 px in the frame); the official example image works,
+  so it is the input, not the install. Larger objects (stool, cart) are probed separately.
+* Environment notes: `transformers` must be 4.56.2 (5.x breaks both DINO loaders); Hunyuan also needs `diffusers==0.35.2`.
