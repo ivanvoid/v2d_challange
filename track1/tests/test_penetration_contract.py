@@ -155,6 +155,13 @@ class PenetrationContract(unittest.TestCase):
             self.assertEqual((baseline / f'{name}_object.obj').read_bytes(),
                              (candidate / f'{name}_object.obj').read_bytes())
 
+    def test_scored_cd_h_is_independent_of_object_translation(self):
+        scorer = (paths.KIT / 'v2dlb/mhr_metrics.py').read_text()
+        # The public scorer computes CD-H from human surfaces alone. The upload
+        # must preserve this property, but a leaderboard row can mix upload versions.
+        self.assertIn('"cd_h_cm": symmetric_chamfer_distance(pred_human_surface,', scorer)
+        self.assertIn('"cd_o_cm": symmetric_chamfer_distance(pred_object_surface,', scorer)
+
     def test_blending_only_moves_object_translation(self):
         base = {"translation": [0, 0, 3], "rotation": [1, 0, 0, 0], "scale": [1, 1, 1]}
         moved = {**base, "translation": [0.02, 0, 3]}

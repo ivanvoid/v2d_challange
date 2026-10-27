@@ -21,6 +21,7 @@ the object translation per scored stretch (jitter, not the error).
 | 0 | 2026-10-15 | baseline | `20b2d5c` | stages 1–8 as in HANDOFF.md | 15.716 | 37.420 | 0.1745 | 0.1274 | 0.1007 | 0.0966 | 12.38 | 0.454 | 0.131 | 0.115 | `submission/track1.parquet` |
 | 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
 | 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | 15.716 | 30.956 | 0.1742 | 0.1235 | 0.0451 | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
+| 3 | 2026-10-27 | penfix_smooth | `fd79f96` | stage-8-only bounded smooth object translation on foam episodes 15–17; scores reported by user, receipt/upload hash pending | 15.9737* | 30.9978 | 0.17421 | 0.12355 | 0.03349 | 0.0396 | 4.70 | 0.487 | 0.130 | 0.112 | `experiments/penfix_smooth/track1.parquet` |
 
 ## Notes per experiment
 
@@ -137,7 +138,19 @@ self-acceleration 0.1122 -> 0.1123 cm/frame². All three changed episodes pass t
 references code commit `fd79f965f212345b9bca3ca15c2587a2bb243ccf`, which is currently on local
 `beta-models` only: **do not upload until the commit is pushed and the GitHub URL is accessible**.
 The file SHA-256 is `415332f98891baf3af8e7fbb6c6ec9559af06dfacfe9b6be7d1e2c91bfafc652`.
-No Kaggle score is available for this trial, and it is not guaranteed to improve the other four metrics.
+The local trial alone did not establish its Kaggle scores or guarantee improvements on the other four metrics;
+the subsequently user-reported Kaggle result is recorded below.
+
+**3 · penfix_smooth user-reported Kaggle result (Oct 27, receipt not yet inspected):** PEN 0.04506 →
+0.03349 cm (−25.7 %), CD-O 30.95621 → 30.99780 cm (+0.04159 cm), ACC-O 0.12346 → 0.12355
+cm/frame² (+0.00009), ACC-H unchanged at 0.17421. User reports CD-H 15.97370 versus
+15.71611 for experiment 2 (+0.25759 cm). **This CD-H difference is not attributable to this
+local artifact:** compared against `experiments/stage67_v2/track1.parquet`, its only changed
+`x/y/z` values are 691 `object_translation` rows in episodes 15–17. The Track 1 scorer's
+`cd_h_cm` evaluates human surface points only and uses an episode-indexed sampling seed.
+Check that all five score entries belong to the same Kaggle upload and compare the submitted
+file's SHA-256 with `415332f98891baf3af8e7fbb6c6ec9559af06dfacfe9b6be7d1e2c91bfafc652`.
+Do not treat the reported CD-H change as an algorithmic regression until provenance is verified.
 
 **CARI4D follow-up feasibility (no pretrained inference yet):** the native-MHR implementation under
 `/workspace/v2d_cari4d` has a model-matched anatomical hand surface asset and differentiable
