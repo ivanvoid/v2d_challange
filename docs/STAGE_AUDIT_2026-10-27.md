@@ -33,6 +33,12 @@ through `track1_meta.json.frame_offset`, unless stated as full-video counts.
   now defaults to `logs/eval/beta/prodnow` and refuses to compare if the
   current-production proxy file is absent. An explicit `BETA_BASELINE` can
   still override it. This prevents a false gain from a stale comparator.
+- **Penetration QA threshold:** `qa_episode.py` previously warned only above
+  **1 cm** local estimated penetration; that could mark a physically poor
+  reconstruction as unflagged while Kaggle PEN scores centimetres at a much
+  finer precision. It now warns above **0.05 cm**. This report is approximate
+  (normal-based signed distance, not the official hidden hand indices) and
+  warning flags do not automatically fail stage 8 or upload a submission.
 - **Stool prior:** the user confirmed episodes 24 and 26 are stationary for
   their whole videos, episode 25 is not. Multi-frame stationary fitting on
   held-out visible frames improved IoU 0.819→0.833 and 0.774→0.786.

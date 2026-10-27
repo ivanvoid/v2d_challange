@@ -7,6 +7,7 @@ from pathlib import Path
 T1 = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(T1))
 import paths  # noqa: E402
+from qa_episode import GATES  # noqa: E402
 
 
 class StageContracts(unittest.TestCase):
@@ -35,6 +36,11 @@ class StageContracts(unittest.TestCase):
         beta = (T1.parent / 'run_beta.sh').read_text(encoding='utf-8')
         self.assertIn('BETA_BASELINE:-$BASEPATH/logs/eval/beta/prodnow', beta)
         self.assertIn('current-production control missing', beta)
+
+    def test_qa_reports_subcentimetre_penetration_as_a_warning(self):
+        threshold, operator, flag = GATES['pen_cm']
+        self.assertLessEqual(threshold, 0.05)
+        self.assertEqual((operator, flag), ('>', 'penetration'))
 
 
 if __name__ == '__main__':

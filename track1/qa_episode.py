@@ -51,7 +51,10 @@ RIGHT_WRIST, LEFT_WRIST = 41, 77  # MHR skeleton joints (sam_3d_body wrist_twist
 GATES = {  # metric: (threshold, direction, flag)
     "acc_h_self_cm": (0.5, ">", "body_jitter"),
     "acc_o_self_cm": (0.5, ">", "object_jitter"),
-    "pen_cm": (1.0, ">", "penetration"),
+    # Local QA is approximate (sampled surface normals), but one centimetre
+    # was far too permissive for a leaderboard where PEN is reported in cm.
+    # This is a review WARN, not an automatic submission rejection.
+    "pen_cm": (0.05, ">", "penetration"),
     "contact_gap_median_cm": (10.0, ">", "no_contact"),
     "abs_body_minus_object_dz_cm": (10.0, ">", "body_object_depth_mismatch"),
     "obj_iou_mean": (0.5, "<", "object_reprojection"),
