@@ -28,6 +28,11 @@ through `track1_meta.json.frame_offset`, unless stated as full-video counts.
   supplies one per-video camera calibration. Episode 24 logs frames 0..261
   across the whole clip. No single-frame camera-parameter problem was found.
   Do not rerun stage 1 without an independent calibration residual.
+- **Ablation comparison baseline:** `run_beta.sh eval` formerly defaulted to the
+  Oct-15 baseline even though newer production had changed substantially. It
+  now defaults to `logs/eval/beta/prodnow` and refuses to compare if the
+  current-production proxy file is absent. An explicit `BETA_BASELINE` can
+  still override it. This prevents a false gain from a stale comparator.
 - **Stool prior:** the user confirmed episodes 24 and 26 are stationary for
   their whole videos, episode 25 is not. Multi-frame stationary fitting on
   held-out visible frames improved IoU 0.819→0.833 and 0.774→0.786.
