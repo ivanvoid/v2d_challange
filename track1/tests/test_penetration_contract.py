@@ -136,6 +136,25 @@ class PenetrationContract(unittest.TestCase):
         self.assertEqual(spec['vertex_indices'].shape, (2, 2318))
         self.assertEqual(spec['sample_local_indices'].shape, (2, 256))
 
+    def test_isolated_full_candidate_only_changes_foam_object_translation(self):
+        candidate = paths.DATA / 'experiments/penfix_smooth/episodes'
+        baseline = paths.DATA / 'submission/episodes'
+        if not (candidate / 'episode_000016.npz').exists():
+            self.skipTest('the isolated 30-episode candidate is not assembled')
+        for e in range(30):
+            name = f'episode_{e:06d}'
+            a = np.load(baseline / f'{name}.npz')
+            b = np.load(candidate / f'{name}.npz')
+            self.assertEqual(set(a.files), set(b.files))
+            for key in a.files:
+                if key == 'object_translation' and e in (15, 16, 17):
+                    self.assertGreater(float(np.max(np.abs(a[key] - b[key]))), 0.0)
+                else:
+                    np.testing.assert_array_equal(a[key], b[key], err_msg=f'{name} {key} must remain unchanged')
+            # Mesh is unmodified: PEN improvement is not from damaging/replacing the object.
+            self.assertEqual((baseline / f'{name}_object.obj').read_bytes(),
+                             (candidate / f'{name}_object.obj').read_bytes())
+
     def test_blending_only_moves_object_translation(self):
         base = {"translation": [0, 0, 3], "rotation": [1, 0, 0, 0], "scale": [1, 1, 1]}
         moved = {**base, "translation": [0.02, 0, 3]}
