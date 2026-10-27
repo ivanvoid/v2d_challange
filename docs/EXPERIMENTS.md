@@ -299,3 +299,57 @@ hypothesis*, not proof of improvement against hidden ACC-O/CD-O reference data;
 check packed structure, the reviewed overlays and Kaggle metrics before promotion.
 Files and frame-index/holdout tests: `experiments/stool_static_v1/` and
 `track1/tests/test_stationary_stool.py`.
+
+**Full-file stationary-stool candidate based on the separately scored λ=150
+smoothing variant:** `experiments/stool_static_plus_smooth_t150/track1.parquet`
+(SHA-256 `db83a85d5379b78934287b21493149d0ff5a0215a9b17ba43aed6c16bc795f0a`).
+Compared with `experiments/smooth_t150_full/track1.parquet`, only object
+rotation and translation rows in episodes 24 and 26 differ; the other 28
+episodes, all human parameters, object meshes, scales and scored frame IDs
+are identical. The full 740,780-row kit validator and tests pass. Matched
+30-episode local self-acceleration 0.106191→0.103777 cm/frame², PEN
+0.055814→0.055558 cm; contact 0.488524→0.486457, gap 4.656379→4.710636.
+Because sitting is not continuous hand contact and ACC-O scores error against
+the hidden reference, these proxies alone do not prove a benchmark gain.
+The file embeds commit `126c6c86a655ea9645ae6869786d7d8667baac89`;
+push that commit before any submission. **Not uploaded, no Kaggle score.**
+
+**Camera-prior check:** Stage 1 already uses AnyCalib predictions from 16
+frames evenly distributed across each video (episode 24 logged samples 0,
+17, ..., 261), aggregates intrinsics/distortion by a robust median, and
+stores fixed per-video intrinsics. No single-frame camera-initialization
+bug has been demonstrated, so do not rerun camera calibration without an
+independent residual or image evidence of a calibration error.
+
+## Hula hoop: geometry versus segmentation (isolated local probes)
+
+The user estimates the same rigid hoop's outer diameter at roughly **67–72 cm
+from the person's shoe** (a soft prior, not a measured caliper value). The
+episode-0 hoop lies on the floor in the first clear second, is subsequently
+lifted, and lies on the floor again at the end; episode 1 is held throughout;
+episode 2 is held until its final seconds. `floor.json` supplies an independently
+fitted plane per video. AnyCalib already uses 16 distributed frames per video.
+
+**Do not blindly replace the object mesh with a torus.**
+`track1/hoop_torus_probe.py` generated clean watertight genus-one meshes of
+one shared *physical* diameter and evaluated them against multi-frame masks
+with the original camera and pose held fixed. No high-fit stage-6 training
+anchors exist for episode 1. The best common ring (diameter 0.66 m, tube
+0.03 m) gave held-out IoU ep 0 **0.668→0.721** but ep 2 **0.226→0.000**.
+Ep 2 alone prefers a hoop near 0.82–0.86 m in its CURRENT pose/scale.
+This violates the shared-size prior and implies that pose/scale also needs
+repair. The geometry-only candidate failed its held-out guard, produced no
+submission, and the original meshes/poses remain unchanged.
+
+**Stage-4 mask root cause discovered in episode 0:** early floor-frame mask
+000000 has an inner hole covering 64% of its outer contour; late floor-frame
+000600 has **no hole**—SAM2 produced a filled disk. `masks_raw/1/000600.png`
+and the final mask are identical, so downstream mask repair did not introduce
+the fill. A conservative offline repair of high-fill masks only in the
+user-confirmed final floor interval changed **48/630 frames**, never adds
+pixels or affects the opening masks, and raised IoU of the existing saved
+ring poses on those frames from **0.279→0.636** (48 improved, 0 worsened).
+The masks reside only under `experiments/hoop_mask_v1/masks/1/`; the test is
+not ground truth and the independent gate is an isolated stage-6 rerun,
+logged at `experiments/hoop_mask_v1/stage6.log`. Do not promote solely on
+the saved-pose IoU; score tracking on unchanged/unmodified frames too.

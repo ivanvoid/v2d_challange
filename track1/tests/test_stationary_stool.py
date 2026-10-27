@@ -112,6 +112,15 @@ class StationaryStool(unittest.TestCase):
             self.assertEqual((control / f'{stem}_object.obj').read_bytes(),
                              (candidate / f'{stem}_object.obj').read_bytes())
 
+    def test_existing_camera_initialization_samples_across_whole_video(self):
+        log = paths.DATA / 'logs/stages/01_prep/episode_000024.debug.log'
+        if not log.exists():
+            self.skipTest('episode-24 calibration log unavailable')
+        samples = [line for line in log.read_text(encoding='utf-8').splitlines() if 'sampled frame ' in line]
+        self.assertEqual(len(samples), 16)
+        self.assertIn('sampled frame 0 ', samples[0])
+        self.assertIn('sampled frame 261 ', samples[-1])
+
 
 if __name__ == '__main__':
     unittest.main()
