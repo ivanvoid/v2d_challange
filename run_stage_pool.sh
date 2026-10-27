@@ -25,9 +25,10 @@ cd "$V2D_DATA"
 WORKERS=(${WORKERS:?set WORKERS, e.g. WORKERS=\"0 0 2 2\"})
 for g in "${WORKERS[@]}"; do [[ "$g" != 1 ]] || { echo "GPU 1 is not ours"; exit 2; }; done
 EPS="${EPISODES:-0-29}"
-LOG="logs/stages/run_pool_stage${STAGE}${POOL_TAG:-}.log"
-QUEUE="logs/stages/.queue_stage${STAGE}${POOL_TAG:-}"   # POOL_TAG=_b: a second pool with its own queue
-mkdir -p logs/stages
+LOGD="logs/${V2D_LOGS:-stages}"                        # run_beta.sh: logs/beta/<tag>
+LOG="$LOGD/run_pool_stage${STAGE}${POOL_TAG:-}.log"
+QUEUE="$LOGD/.queue_stage${STAGE}${POOL_TAG:-}"   # POOL_TAG=_b: a second pool with its own queue
+mkdir -p "$LOGD"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 expand() { local t; for t in $1; do if [[ "$t" == *-* ]]; then seq "${t%-*}" "${t#*-}"; else echo "$t"; fi; done; }
@@ -69,7 +70,7 @@ done
 wait
 rm -f "$QUEUE" "$QUEUE.lock"
 say "building the full review page (reuses the per-episode results)"
-ALL_REVIEWED="$( { expand "$EPS"; ls logs/stages/0${STAGE}_*/episode_*.checks.json 2>/dev/null \
+ALL_REVIEWED="$( { expand "$EPS"; ls "$LOGD"/0${STAGE}_*/episode_*.checks.json 2>/dev/null \
     | sed -E 's/.*episode_0*([0-9]+)\.checks\.json/\1/'; } | sort -n | uniq | tr '\n' ' ')"
 REVIEW_ONLY=1 GPU="${WORKERS[0]}" EPISODES="$ALL_REVIEWED" "$CODE/run_stage.sh" "$STAGE" > /dev/null 2>&1
 say "stage $STAGE done: $(grep -c "FAILED" "$LOG") FAILED lines in $LOG so far"

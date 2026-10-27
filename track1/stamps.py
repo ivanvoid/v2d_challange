@@ -38,8 +38,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths  # noqa: E402
 
 T1 = Path(__file__).resolve().parent
-OUT = paths.DATA / "out"
+OUT = paths.OUT
 KIT_T1 = paths.KIT / "tools" / "track1"
+
+# beta switches (run_beta.sh): stage -> (env var, production value, extra entry scripts). When the switch is
+# set to anything but the production value, its value goes into the stage's params and the beta scripts into
+# its code, so switching invalidates that stage and everything downstream. Unset = production stamps unchanged.
+BETA = {"1": ("BETA_DEPTH", "moge", ["beta/depth_vda.py"]),
+        "5": ("BETA_MESH", "sam3d", ["beta/mesh_gen.py"]),
+        "7": ("BETA_TRACK", "off", ["beta/point_tracks.py", "beta/track_refine.py"])}
+
+
+def beta_value(stage: str) -> str | None:
+    """The active beta switch value of this stage, None when it runs the production model."""
+    if stage not in BETA:
+        return None
+    var, prod, _ = BETA[stage]
+    v = os.environ.get(var, "")
+    return None if v in ("", prod) else v
 
 # stage: entry scripts (track1/), extra files, direct dependencies, input files, outputs
 STAGES = {
@@ -67,7 +83,7 @@ STAGES = {
     "6": dict(code=["stage6_track.py"], extra=[T1 / "object_priors.json"], deps=["1", "2", "4", "5e"], inputs=["OVERRIDES"],
               outputs=["poses", "track/states.json"]),
     "7": dict(code=["stage7_smooth.py"], extra=[], deps=["6"], inputs=[],
-              outputs=["poses_smoothed", "track/smooth.json"]),
+              outputs=["poses_smoothed", "track/smooth.json", "poses_smoothed_s7", "track/refine.json", "track/points.npz"]),
     "8": dict(code=["stage8_scale.py", "build_episode.py", "qa_episode.py"],
               extra=[T1.parent / "render_results.py", KIT_T1 / "mesh_to_mhr_params.py"],
               deps=["1", "2", "7"], inputs=[],
@@ -102,7 +118,7 @@ def local_imports(script: Path, seen: set[Path]) -> None:
 
 def code_hashes(stage: str) -> dict[str, str]:
     files: set[Path] = set()
-    for s in STAGES[stage]["code"]:
+    for s in STAGES[stage]["code"] + (BETA[stage][2] if beta_value(stage) else []):
         local_imports(T1 / s, files)
     files |= {Path(p) for p in STAGES[stage]["extra"]}
     return {str(p.relative_to(T1.parent) if T1.parent in p.parents else p): sha1_file(p) for p in sorted(files)}
@@ -157,6 +173,8 @@ def params_of(stage: str) -> dict:
     if stage == "2":
         return {"SMOOTH_SIGMA": os.environ.get("SMOOTH_SIGMA", "2.0"), "BODY_MODE": os.environ.get("BODY_MODE", "body"),
                 "BODY_NO_MASK": os.environ.get("BODY_NO_MASK", "")}
+    if beta_value(stage):
+        return {BETA[stage][0]: beta_value(stage)}
     return {}
 
 
@@ -239,8 +257,8 @@ def archive(e: int, stage: str) -> None:
     moved = []
     for o in STAGES[stage]["outputs"]:
         if o == "SUB_EPISODE":
-            srcs = [paths.DATA / "submission" / "episodes" / f"episode_{e:06d}{s}" for s in (".npz", "_object.obj")]
-            srcs.append(paths.DATA / "submission" / "reports" / f"episode_{e:06d}.json")
+            srcs = [paths.SUB / "episodes" / f"episode_{e:06d}{s}" for s in (".npz", "_object.obj")]
+            srcs.append(paths.SUB / "reports" / f"episode_{e:06d}.json")
         else:
             srcs = [W / o]
         for src in srcs:

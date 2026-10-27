@@ -22,6 +22,10 @@
 # track1/stamps.py) matches its current code, settings, inputs and upstream stamps; otherwise its old
 # outputs are moved to out/<ep>/_archive/<stage>/ and it runs from scratch. Upstream stages must be
 # stamped first (bottom-up). `python3 track1/stamps.py status` shows what is up to date.
+#
+# Beta (run_beta.sh sets these; unset = production): V2D_OUT / V2D_SUB / V2D_LOGS move out/, submission/
+# and logs/stages/; BETA_DEPTH=vda (stage 1), BETA_MESH=trellis2|hunyuan (stage 5), BETA_TRACK=cotracker
+# (stage 7) switch in the new models (track1/beta/, venvs from setup_beta_envs.sh).
 # =============================================================================
 set -uo pipefail
 
@@ -36,7 +40,7 @@ export V2D_BACKEND=venv
 export CUDA_VISIBLE_DEVICES="$GPU"
 unset CONFIG_FILE CHECKPOINT_FILE
 T1="$CODE/track1"
-OUT="$BASEPATH/out"
+OUT="${V2D_OUT:-$BASEPATH/out}"
 WEIGHTS="$BASEPATH/weights"
 SPANS="$BASEPATH/submission/scored_spans.json"
 PY_PIPE=python
@@ -44,7 +48,9 @@ PY_REVIEW=/opt/venvs/sam3d_body/bin/python
 PY_SUB="$BASEPATH/.venv-submit/bin/python"
 PY_FP=/opt/venvs/foundation_pose/bin/python
 PY_RENDER=/opt/venvs/wilor/bin/python
-SUB="$BASEPATH/submission"
+SUB="${V2D_SUB:-$BASEPATH/submission}"
+VENVS="${V2D_VENV_ROOT:-/opt/venvs}"
+beta_on() { local v="${!1:-}"; [[ -n "$v" && "$v" != "$2" ]]; }   # beta_on BETA_MESH sam3d
 
 stage4_mask() {  # $1 = episode: prompts -> SAM2 -> (re-detect -> SAM2) x <= 2 -> leak repair -> assess
     local N="$1" EP PLOG DLOG rc
@@ -157,7 +163,7 @@ case "$STAGE" in
     8) NAME=08_final ;;
     *) echo "unknown stage $STAGE"; exit 2 ;;
 esac
-SDIR="$BASEPATH/logs/stages/$NAME"
+SDIR="$BASEPATH/logs/${V2D_LOGS:-stages}/$NAME"
 mkdir -p "$SDIR/review" "$OUT"
 exec > >(tee -a "$SDIR/batch.log") 2>&1
 
@@ -182,7 +188,7 @@ build_review() {  # $1 = episodes to include; rebuilds review/ sheets and index.
         6) "$PY_REVIEW" "$T1/review_stage6.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
         7) "$PY_REVIEW" "$T1/review_stage7.py" --episodes $L --out_root "$OUT" --stage_dir "$SDIR" ;;
         8) "$PY_REVIEW" "$T1/review_stage8.py" --episodes $L --out_root "$OUT" \
-               --sub_dir "$BASEPATH/submission" --stage_dir "$SDIR" ;;
+               --sub_dir "$SUB" --stage_dir "$SDIR" ;;
     esac 2>&1 | grep -v pynvml
     flock -u 9
 }
@@ -196,7 +202,7 @@ if [[ -n "${REVIEW_ONLY:-}" ]]; then         # this episode's review only; the f
         5c) "$PY_REVIEW" "$T1/review_stage5.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
         6) "$PY_REVIEW" "$T1/review_stage6.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
         7) "$PY_REVIEW" "$T1/review_stage7.py" --episodes $EP_LIST --out_root "$OUT" --stage_dir "$SDIR" ;;
-        8) "$PY_REVIEW" "$T1/review_stage8.py" --episodes $EP_LIST --out_root "$OUT" --sub_dir "$BASEPATH/submission" --stage_dir "$SDIR" ;;
+        8) "$PY_REVIEW" "$T1/review_stage8.py" --episodes $EP_LIST --out_root "$OUT" --sub_dir "$SUB" --stage_dir "$SDIR" ;;
     esac 2>&1 | grep -v pynvml
     exit 0
 fi
@@ -278,7 +284,16 @@ for N in $EP_LIST; do
     if [[ "$STAGE" != 1 ]]; then $STAMPS archive --episode "$N" --stage "$STAGE" | tee -a "$SDIR/$EP.log"; fi
     rm -f "$SDIR/.stamp_$N"
     case "$STAGE" in
-        1) "$PY_PIPE" "$T1/stage1_prep.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
+        1) if beta_on BETA_DEPTH moge; then       # beta: depth_raw/ from Video Depth Anything instead of MoGe
+               "$VENVS/vda/bin/python" "$T1/beta/depth_vda.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
+                   --model "$BETA_DEPTH" --debug_log "$SDIR/$EP.debug.log" 2>> "$SDIR/$EP.debug.log" | tee -a "$SDIR/$EP.log"
+               rc=${PIPESTATUS[0]}
+               if [[ $rc -ne 0 ]]; then
+                   N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $EP FAILED: beta depth ($BETA_DEPTH), see $EP.debug.log"
+                   continue
+               fi
+           fi
+           "$PY_PIPE" "$T1/stage1_prep.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                --spans "$SPANS" --debug_log "$SDIR/$EP.debug.log" 2>&1 | tee -a "$SDIR/$EP.log"
            rc=${PIPESTATUS[0]} ;;
         2) stage2_body "$N"; rc=$? ;;
@@ -286,8 +301,13 @@ for N in $EP_LIST; do
                2>> "$SDIR/$EP.debug.log" | tee -a "$SDIR/$EP.log"
            rc=${PIPESTATUS[0]} ;;
         4) stage4_mask "$N"; rc=$? ;;
-        5) { "$PY_REVIEW" "$T1/stage5_pick.py" --episode "$N" --out_root "$OUT" 2>> "$SDIR/$EP.debug.log" \
-             && "$PY_PIPE" "$T1/stage5_mesh.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
+        5) if beta_on BETA_MESH sam3d; then       # beta: candidate meshes from TRELLIS.2 / Hunyuan3D-2
+               MESH_CMD=("$VENVS/$BETA_MESH/bin/python" "$T1/beta/mesh_gen.py" --model "$BETA_MESH")
+           else
+               MESH_CMD=("$PY_PIPE" "$T1/stage5_mesh.py")
+           fi
+           { "$PY_REVIEW" "$T1/stage5_pick.py" --episode "$N" --out_root "$OUT" 2>> "$SDIR/$EP.debug.log" \
+             && "${MESH_CMD[@]}" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                     --debug_log "$SDIR/$EP.debug.log" \
              && "$PY_FP" "$T1/stage5_scale.py" --episode "$N" --out_root "$OUT" --weights "$WEIGHTS" \
                     --debug_log "$SDIR/$EP.debug.log"; } 2>&1 | tee -a "$SDIR/$EP.debug.log" \
@@ -302,7 +322,14 @@ for N in $EP_LIST; do
            rc=${PIPESTATUS[0]} ;;
         7) "$PY_REVIEW" "$T1/stage7_smooth.py" --episode "$N" --out_root "$OUT" \
                2>> "$SDIR/$EP.debug.log" | tee -a "$SDIR/$EP.log"
-           rc=${PIPESTATUS[0]} ;;
+           rc=${PIPESTATUS[0]}
+           if [[ $rc -eq 0 ]] && beta_on BETA_TRACK off; then   # beta: object point tracks refine the smoothed poses
+               { "$VENVS/$BETA_TRACK/bin/python" "$T1/beta/point_tracks.py" --episode "$N" --out_root "$OUT" \
+                     --weights "$WEIGHTS" --model "$BETA_TRACK" --debug_log "$SDIR/$EP.debug.log" \
+                 && "$PY_REVIEW" "$T1/beta/track_refine.py" --episode "$N" --out_root "$OUT"; } \
+                 2>> "$SDIR/$EP.debug.log" | tee -a "$SDIR/$EP.log"
+               rc=${PIPESTATUS[0]}
+           fi ;;
         8) stage8_final "$N"; rc=$? ;;
     esac
     if [[ $rc -ne 0 ]]; then
@@ -321,7 +348,7 @@ done
 if [[ -z "${NO_REVIEW:-}" ]]; then echo "[$(date +%T)] building review"; build_review "$EP_LIST"; fi
 if [[ "$STAGE" == "8" && -z "${NO_REVIEW:-}" ]]; then
     echo "[$(date +%T)] packing a validation parquet for these episodes (placeholder commit; not uploadable)"
-    "$PY_SUB" "$T1/pack_submission.py" --partial 2>&1 | tail -4
+    "$PY_SUB" "$T1/pack_submission.py" --partial --episodes "$SUB/episodes" --out "$SUB/track1_partial.parquet" 2>&1 | tail -4
 fi
 echo "===== stage $NAME done in $(( (SECONDS - T0) / 60 )) min, $N_FAIL failure(s). Review: $SDIR/index.html ====="
 [[ "$N_FAIL" -eq 0 ]]
