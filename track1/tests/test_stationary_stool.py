@@ -94,6 +94,24 @@ class StationaryStool(unittest.TestCase):
                              (trial / f'{stem}_object.obj').read_bytes())
         self.assertFalse((trial / 'episode_000025.npz').exists())
 
+    def test_full_candidate_changes_only_stationary_stool_episodes(self):
+        candidate = paths.DATA / 'experiments/stool_static_plus_smooth_t150/episodes'
+        control = paths.DATA / 'experiments/smooth_t150_full/episodes'
+        if not (candidate / 'episode_000029.npz').exists():
+            self.skipTest('full stationary-stool candidate not yet assembled')
+        for e in range(30):
+            stem = f'episode_{e:06d}'
+            with np.load(control / f'{stem}.npz') as original, np.load(candidate / f'{stem}.npz') as fixed:
+                self.assertEqual(set(original.files), set(fixed.files))
+                for key in original.files:
+                    if e in (24, 26) and key in ('object_rotation', 'object_translation'):
+                        self.assertTrue(np.any(original[key] != fixed[key]))
+                    else:
+                        np.testing.assert_array_equal(original[key], fixed[key],
+                                                      err_msg=f'{stem} {key} changed unexpectedly')
+            self.assertEqual((control / f'{stem}_object.obj').read_bytes(),
+                             (candidate / f'{stem}_object.obj').read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()
