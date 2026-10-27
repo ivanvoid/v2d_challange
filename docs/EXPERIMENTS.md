@@ -376,3 +376,10 @@ Seven anchors were proposed, but the first three early attempts had best IoU
 `experiments/hoop_vis_v1/stage6_gate.json` rejected the run; no submission
 file was produced. Future anchor search must validate registration fit rather
 than rely on maximum visible mask area.
+
+**Quality-ranked 30-frame-window anchor follow-up, episode 1:** new fresh
+anchors registered at video frames 141/302/360/448/460; many others failed
+IoU<0.4. Scored median IoU 0.3545→0.3890, but lost share 32.8%→33.9%
+and translation-step p99 13.84→19.04 cm. Gate failed; there is **no**
+supported new hoop Parquet to submit from these overnight experiments.
+See `docs/STAGE_AUDIT_2026-10-27.md` for the full diagnosis.

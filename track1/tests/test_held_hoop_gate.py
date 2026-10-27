@@ -33,6 +33,17 @@ class HeldHoopGate(unittest.TestCase):
         self.assertGreater(r['after']['lost_fraction'], r['before']['lost_fraction'])
         self.assertFalse(r['checks']['lost_stretches'])
 
+    def test_quality_ranked_pilot_rejected_pose_jumps_and_lost_coverage(self):
+        path = paths.DATA / 'experiments/hoop_quality_relaxed_v1/stage6_gate.json'
+        if not path.exists():
+            self.skipTest('quality-ranked hoop pilot not yet evaluated')
+        r = json.loads(path.read_text())
+        self.assertFalse(r['pass'])
+        self.assertGreater(r['after']['median_iou'], r['before']['median_iou'])
+        self.assertGreater(r['after']['lost_fraction'], r['before']['lost_fraction'])
+        self.assertFalse(r['checks']['lost_stretches'])
+        self.assertFalse(r['checks']['translation_continuity'])
+
 
 if __name__=='__main__':
     unittest.main()

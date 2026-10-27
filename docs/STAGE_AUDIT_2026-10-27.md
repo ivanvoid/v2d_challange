@@ -125,16 +125,30 @@ the best registration frame; video frame 153 disproves that heuristic.
 scored-frame safeguards. A new hoop submission is **not prepared** rather than
 mislabel a mask-IoU improvement as CD-O/ACC-O progress.
 
-**Final targeted held-hoop anchor pilot underway:** the visibility-only run
+**Final targeted held-hoop anchor pilot:** the visibility-only run
 discarded useful early frame 141 (registration IoU ~0.47 in production) in
 favour of frame 153 (fresh registration IoU 0.00). The production quality
 threshold also skipped five windows. A third, separate episode-1 run ranks
 frames by quality every **30** frames, permits body occlusion up to 0.9
 (the user confirms the hoop is held), and lets fresh registration's existing
 IoU≥0.4 gate reject bad proposals. See
-`experiments/hoop_quality_relaxed_v1/stage6.log`. This is a hypothesis, not a
-submission: apply the same unchanged-mask scored-frame gate and stop if lost
-coverage, fit or motion regresses. Do not mix it with the episode-0 mask edit.
+`experiments/hoop_quality_relaxed_v1/stage6.log`.
+
+**Final quality-ranked pilot result — REJECT:** 13 anchors were proposed;
+141/302/360/448/460 registered above IoU 0.4. Most other proposals failed
+(173 IoU 0.00, 201 0.13, 232 0.25). Across the exact 174 scored frames,
+median IoU improved **0.3545→0.3890**, but lost share worsened
+**32.8%→33.9%** and object translation-step p99 worsened **13.84→19.04 cm**.
+The independent gate rejected it (`experiments/hoop_quality_relaxed_v1/stage6_gate.json`),
+so stages 7–8 were not run and no full candidate was assembled. More anchors
+cannot recover the continuously held/occluded ring without a better pose model.
+
+**Submission decision:** none of the hoop interventions tested overnight
+passed independent scored-frame safeguards. A safe next hoop submission is
+**not available**. Preserve prior submissions. Further work needs a
+ring-specific multi-frame pose model using visible arcs, a shared soft size
+prior and temporal/body evidence, not just another FoundationPose anchor
+selection switch or a higher IoU against a mask we edited ourselves.
 
 **Provenance:** user-provided physical priors, local images, public scorer and
 control proxies; no organizer reference poses/meshes were available. Production
