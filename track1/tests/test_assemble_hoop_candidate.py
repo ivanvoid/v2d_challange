@@ -21,6 +21,9 @@ class AssembleHoopCandidate(unittest.TestCase):
             validate_episode_delta(base,{**changed, 'pose': np.ones((2,136),np.float32)})
         with self.assertRaises(ValueError):
             validate_episode_delta(base,{**changed,'object_scale':np.array(1.3,np.float32)})
+        # Episode 1's mesh differs from episode 0's: use its ACTUAL mesh extent.
+        validate_episode_delta(base,{**changed,'object_scale':np.array(1.1,np.float32)},
+                               mesh_max_extent_m=.692)
 
 
 if __name__ == '__main__':

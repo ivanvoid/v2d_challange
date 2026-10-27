@@ -39,6 +39,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--trial', type=Path, required=True)
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--episode', type=int, choices=(0, 1), required=True)
     args = ap.parse_args()
     trial, out = args.trial.resolve(), args.out.resolve()
     allowed = paths.DATA.resolve() / 'experiments'
@@ -49,7 +50,8 @@ def main() -> None:
         raise SystemExit('packed episode-0 evaluation must finish before assembling a full candidate')
     baseline = paths.DATA / 'experiments/stool_static_plus_smooth_t150/episodes'
     changed = trial / 'episodes'
-    stem = 'episode_000000'
+    episode = args.episode
+    stem = f'episode_{episode:06d}'
     mesh_src = baseline / f'{stem}_object.obj'
     if mesh_src.read_bytes() != (changed / mesh_src.name).read_bytes():
         raise SystemExit('hoop mesh changed; this must remain a pose-only experiment')
@@ -57,29 +59,31 @@ def main() -> None:
         with np.load(folder / f'{stem}.npz') as data:
             return {k: data[k] for k in data.files}
     old, new = load(baseline), load(changed)
-    validate_episode_delta(old, new)
+    import trimesh
+    mesh_max_extent = float(trimesh.load(mesh_src, force='mesh', process=False).extents.max())
+    validate_episode_delta(old, new, mesh_max_extent_m=mesh_max_extent)
     before = json.loads((paths.DATA / 'experiments/stool_static_plus_smooth_t150/eval/proxies.json').read_text())
     after = json.loads((trial / 'eval/proxies.json').read_text())
-    old_row = next(r for r in before['episodes'] if r['episode'] == 0)
-    new_row = next(r for r in after['episodes'] if r['episode'] == 0)
+    old_row = next(r for r in before['episodes'] if r['episode'] == episode)
+    new_row = next(r for r in after['episodes'] if r['episode'] == episode)
     if new_row['pen_cm'] > old_row['pen_cm'] + .01 or new_row['acc_o_self'] > old_row['acc_o_self'] + .03:
-        raise SystemExit('episode-0 local PEN/jitter regressed beyond pre-declared budgets')
+        raise SystemExit('hoop local PEN/jitter regressed beyond pre-declared budgets')
     episodes = out / 'episodes'
     episodes.mkdir(parents=True, exist_ok=True)
     for e in range(30):
         name = f'episode_{e:06d}'
         for suffix in ('.npz', '_object.obj'):
-            source = changed if e == 0 else baseline
+            source = changed if e == episode else baseline
             path = source / f'{name}{suffix}'
             if not path.is_file():
                 raise FileNotFoundError(path)
             shutil.copy2(path, episodes / path.name)
     (out / 'manifest.json').write_text(json.dumps({
-        'name': out.name, 'status': 'not packed, not uploaded; gate passed for isolated episode 0',
-        'source': str(baseline), 'hoop_trial': str(trial), 'changed_episodes': [0],
+        'name': out.name, 'status': 'not packed, not uploaded; isolated hoop episode passed its gate',
+        'source': str(baseline), 'hoop_trial': str(trial), 'changed_episodes': [episode],
         'stage6_gate': str(trial / 'stage6_gate.json'),
-        'episode0_local_baseline': {k: old_row[k] for k in ('pen_cm', 'acc_o_self', 'gap_cm_median')},
-        'episode0_local_candidate': {k: new_row[k] for k in ('pen_cm', 'acc_o_self', 'gap_cm_median')},
+        'changed_episode_local_baseline': {k: old_row[k] for k in ('pen_cm', 'acc_o_self', 'gap_cm_median')},
+        'changed_episode_local_candidate': {k: new_row[k] for k in ('pen_cm', 'acc_o_self', 'gap_cm_median')},
     }, indent=2)+'\n')
     print(f'assembled isolated 30-episode candidate under {out}; pack and validate before any upload')
 
