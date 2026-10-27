@@ -20,7 +20,7 @@ the object translation per scored stretch (jitter, not the error).
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | 2026-10-15 | baseline | `20b2d5c` | stages 1–8 as in HANDOFF.md | 15.716 | 37.420 | 0.1745 | 0.1274 | 0.1007 | 0.0966 | 12.38 | 0.454 | 0.131 | 0.115 | `submission/track1.parquet` |
 | 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
-| 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | _not submitted_ | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
+| 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | 15.716 | 30.956 | 0.1742 | 0.1235 | 0.0451 | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
 
 ## Notes per experiment
 
@@ -51,7 +51,7 @@ ACC-H unchanged.** The contact signal predicted the direction; size consistency 
 Next: choose the object's depth scale per episode continuously (not 3 variants) by minimising the
 hand–object gap on scored frames only, and check the gain locally before submitting.
 
-**2 · stage67_v2 (local only, not yet submitted)** — a bundle, not a one-variable change: everything from stage 5e on was
+**2 · stage67_v2 (submitted Oct 22; scores from the Oct 27 public leaderboard)** — a bundle, not a one-variable change: everything from stage 5e on was
 re-run (see HANDOFF.md). Local proxies vs the baseline (`eval_local.py compare logs/eval/baseline logs/eval/stage67_v2`):
 * local PEN 0.0966 -> 0.0555, median hand-object gap 12.4 -> 4.65 cm, contact 0.454 -> 0.489,
   object steps > 10 cm per frame 0.233 -> 0, accO(self) 0.1145 -> 0.1122, accH(self) unchanged (0.131 -> 0.130)
@@ -128,3 +128,24 @@ These are local proxies; only Kaggle evaluates reference alignment and the hidde
 interpret zero median contact gap as no penetration. A one-episode trial with stronger shifts had gap 3.7 cm
 and contact 40 % and was rejected. Recheck the full packed candidate before any upload, and keep it separate
 from both `submission/track1.parquet` and `experiments/stage67_v2/track1.parquet`.
+
+**Full packed trial:** `experiments/penfix_smooth/track1.parquet` (740,780 rows), containing only 691 changed
+`object_translation` rows in episodes 15-17; every other array and episode matches experiment 2 exactly.
+Matched 30-episode local mean PEN is **0.0555 -> 0.0396 cm**; contact 0.4889 -> 0.4872, object
+self-acceleration 0.1122 -> 0.1123 cm/frame². All three changed episodes pass the guardrails in
+`experiments/penfix_smooth/full_gate.json`. The kit's local schema validator passes. The packed file
+references code commit `fd79f965f212345b9bca3ca15c2587a2bb243ccf`, which is currently on local
+`beta-models` only: **do not upload until the commit is pushed and the GitHub URL is accessible**.
+The file SHA-256 is `415332f98891baf3af8e7fbb6c6ec9559af06dfacfe9b6be7d1e2c91bfafc652`.
+No Kaggle score is available for this trial, and it is not guaranteed to improve the other four metrics.
+
+**CARI4D follow-up feasibility (no pretrained inference yet):** the native-MHR implementation under
+`/workspace/v2d_cari4d` has a model-matched anatomical hand surface asset and differentiable
+`object_sdf_penetration_loss`; `track1/tests/test_cari4d_feasibility.py` confirms the loss produces
+the expected gradient for hand points inside an analytic solid. However, the default parity
+refinement penalizes **object samples inside the human**, not Kaggle's **hand points inside the
+object**. This must be evaluated or augmented before drawing any conclusion about PEN. A real
+CoCoNet experiment needs the separate gated `nvidia/cari4d_commercial` step-200000 checkpoint,
+the CARI4D image/runtime, and accepted model terms. Neither this checkpoint nor a Docker runtime
+is currently present in this container; `HF_TOKEN` is unset. The public upstream step-031397
+checkpoint in `weights/cari4d/hf/` is not a drop-in replacement for the native-MHR model.
