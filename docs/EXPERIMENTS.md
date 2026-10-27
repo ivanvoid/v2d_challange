@@ -88,3 +88,15 @@ Mean over episodes 6 7 8 (iron):
 * TRELLIS.2: flat sheets (thickness 0.2-5 % of width) for the iron (47 x 82 px in the frame); the official example image works,
   so it is the input, not the install. Larger objects (stool, cart) are probed separately.
 * Environment notes: `transformers` must be 4.56.2 (5.x breaks both DINO loaders); Hunyuan also needs `diffusers==0.35.2`.
+
+**CoTracker3 on 12 episodes** (iron 6 7 8, foam block 15 16 17, stool 24 25 26, cart 27 28 29; `warp` vs the control `prodnow`,
+means over the same 12 episodes):
+
+| run | gap cm | contact | PEN | accH | accO | object size m |
+|---|---|---|---|---|---|---|
+| prodnow (exp 2) | 1.851 | 0.595 | 0.1283 | 0.1352 | 0.1263 | 0.491 |
+| warp (CoTracker3) | 1.856 | 0.596 | 0.1122 | 0.1352 | 0.1403 | 0.489 |
+
+PEN better on 9 of 12 episodes (-12.5 % mean), accO worse on 9 of 12 (+11 %), gap/contact unchanged (gap worse on 5, better on 2).
+It does not repair the weak episodes (stool ep 26 gap 15.6 -> 15.9 cm). A trade (PEN vs ACC-O), not a gain: not included
+in the submission. If a submission slot is spare it could be run as its own experiment (exp 2 + CoTracker, one change).
