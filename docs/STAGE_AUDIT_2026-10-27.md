@@ -125,6 +125,17 @@ the best registration frame; video frame 153 disproves that heuristic.
 scored-frame safeguards. A new hoop submission is **not prepared** rather than
 mislabel a mask-IoU improvement as CD-O/ACC-O progress.
 
+**Final targeted held-hoop anchor pilot underway:** the visibility-only run
+discarded useful early frame 141 (registration IoU ~0.47 in production) in
+favour of frame 153 (fresh registration IoU 0.00). The production quality
+threshold also skipped five windows. A third, separate episode-1 run ranks
+frames by quality every **30** frames, permits body occlusion up to 0.9
+(the user confirms the hoop is held), and lets fresh registration's existing
+IoU≥0.4 gate reject bad proposals. See
+`experiments/hoop_quality_relaxed_v1/stage6.log`. This is a hypothesis, not a
+submission: apply the same unchanged-mask scored-frame gate and stop if lost
+coverage, fit or motion regresses. Do not mix it with the episode-0 mask edit.
+
 **Provenance:** user-provided physical priors, local images, public scorer and
 control proxies; no organizer reference poses/meshes were available. Production
 `out/`, `submission/`, baseline Parquets and the official scorer were not edited.
