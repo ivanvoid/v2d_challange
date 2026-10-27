@@ -100,3 +100,31 @@ means over the same 12 episodes):
 PEN better on 9 of 12 episodes (-12.5 % mean), accO worse on 9 of 12 (+11 %), gap/contact unchanged (gap worse on 5, better on 2).
 It does not repair the weak episodes (stool ep 26 gap 15.6 -> 15.9 cm). A trade (PEN vs ACC-O), not a gain: not included
 in the submission. If a submission slot is spare it could be run as its own experiment (exp 2 + CoTracker, one change).
+
+## PEN correction trial (local, October 27; not uploaded)
+
+The active stage-8 runner uses `poses_final`, so the pre-existing `stage8_depen.py` was not in any submitted
+pipeline. Tests in `track1/tests/test_penetration_contract.py` verify the scorer kernel on a synthetic solid,
+the 40-frame trim offset in foam episode 16, the zero-gap-inside-object ambiguity, and a hard total-shift cap.
+No production output or scorer code was modified by this experiment.
+
+An isolated stage-8-only trial under `experiments/penfix_smooth` uses the existing MHR fit, budgeted mesh
+and final poses. It fits object translations on 256 sampled hand vertices, applies Gaussian smoothing
+(sigma=5) without unsmoothed residual repairs, and caps total shifts at 3 cm. It keeps all object rotations,
+scale, body parameters and mesh unchanged. It then rebuilds and evaluates the actual packed Parquet, not
+just the fitting objective. One initial unsmoothed attempt reduced PEN but raised object self-acceleration
+from 0.184 to 0.528 cm/frame^2 and was rejected. An initial preview packed with frame_offset=0 was invalid;
+the scored video in episode 16 starts at local offset 40. All reported results below use the correct offset.
+
+| foam episode | local PEN (control → trial, cm) | gap (cm) | contact | accO self (cm/frame²) |
+|---|---|---|---|---|
+| 15 | 0.4170 → 0.2879 | 0 → 0.2 | 0.58 → 0.56 | 0.236 → 0.234 |
+| 16 | 0.4584 → 0.2886 | 0 → 0.7 | 0.68 → 0.65 | 0.184 → 0.186 |
+| 17 | 0.2637 → 0.0862 | 1.0 → 1.5 | 0.56 → 0.55 | 0.176 → 0.180 |
+
+Independent anatomical hand samples from an MHR-model-hash-matched CARI4D spec (not the secret Kaggle
+hand indices) also improve on all three: ep 15 0.326→0.235, ep 16 0.367→0.227, ep 17 0.159→0.049 cm.
+These are local proxies; only Kaggle evaluates reference alignment and the hidden hand indices. Do not
+interpret zero median contact gap as no penetration. A one-episode trial with stronger shifts had gap 3.7 cm
+and contact 40 % and was rejected. Recheck the full packed candidate before any upload, and keep it separate
+from both `submission/track1.parquet` and `experiments/stage67_v2/track1.parquet`.

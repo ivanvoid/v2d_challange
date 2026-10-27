@@ -55,7 +55,8 @@ def load_object_track(poses_dir: Path, n_frames: int, frame_offset: int):
         frame = int(Path(f).stem) + frame_offset
         if not 0 <= frame < n_frames:
             continue
-        d = json.load(open(f))
+        with open(f) as handle:
+            d = json.load(handle)
         R[frame] = quat_wxyz_to_rot(d["rotation"])
         t[frame] = np.asarray(d["translation"], float).reshape(3)
         scales.append(np.asarray(d.get("scale", [1.0]), float).reshape(-1))

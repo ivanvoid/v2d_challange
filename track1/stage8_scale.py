@@ -56,6 +56,11 @@ sys.path.insert(0, str(paths.KIT))
 from v2dlb.mesh_budget import budget_mesh  # noqa: E402
 
 
+def contact_gap_from_depth(depth: np.ndarray, surface_distance: np.ndarray) -> np.ndarray:
+    """Contact proxy: an interior point counts as zero gap, not as collision-free."""
+    return np.where(depth > 0, 0.0, surface_distance).min(axis=1) * 100
+
+
 def load_depth(path):
     px = cv2.imread(path, cv2.IMREAD_UNCHANGED).astype(np.float32)
     return 1.0 / np.maximum(px / 65535.0, 1e-6) - 1.0
@@ -146,7 +151,7 @@ def main() -> None:
         flat = local.reshape(-1, 3)
         dep = pm.depth(flat).reshape(local.shape[:2]) * s0 * size
         dist = tree.query(flat)[0].reshape(local.shape[:2]) * s0 * size
-        gap = np.where(dep > 0, 0.0, dist).min(1) * 100
+        gap = contact_gap_from_depth(dep, dist)
         pen = dep.mean(1) * 100
         excess = np.maximum(gap - args.contact_tol_cm, 0.0)
         return {"gap_median_cm": float(np.median(gap)), "contact_frac": float((gap < 2).mean()),
