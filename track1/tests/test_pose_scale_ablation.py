@@ -94,6 +94,39 @@ class PoseScaleAblation(unittest.TestCase):
             self.assertEqual((source / f'{stem}_object.obj').read_bytes(),
                              (candidate / f'{stem}_object.obj').read_bytes())
 
+    def test_strong_smoothing_changes_only_object_translations(self):
+        candidate = paths.DATA / 'experiments/smooth_t150/episodes'
+        source = paths.DATA / 'submission/episodes'
+        if not (candidate / 'episode_000028.npz').exists():
+            self.skipTest('smoothing trial not yet complete')
+        for e in (8, 16, 25, 28):
+            stem = f'episode_{e:06d}'
+            a, b = (np.load(folder / f'{stem}.npz') for folder in (source, candidate))
+            for key in a.files:
+                if key == 'object_translation':
+                    self.assertTrue(np.any(a[key] != b[key]), f'{stem} did not change')
+                else:
+                    np.testing.assert_array_equal(a[key], b[key], err_msg=f'{stem} {key} changed')
+            self.assertEqual((source / f'{stem}_object.obj').read_bytes(),
+                             (candidate / f'{stem}_object.obj').read_bytes())
+
+    def test_full_smoothing_candidate_preserves_all_other_episodes(self):
+        candidate = paths.DATA / 'experiments/smooth_t150_full/episodes'
+        source = paths.DATA / 'submission/episodes'
+        if not (candidate / 'episode_000029.npz').exists():
+            self.skipTest('30-episode smoothing candidate not yet assembled')
+        changed = {8, 16, 25, 28}
+        for e in range(30):
+            stem = f'episode_{e:06d}'
+            a, b = (np.load(folder / f'{stem}.npz') for folder in (source, candidate))
+            for key in a.files:
+                if key == 'object_translation' and e in changed:
+                    self.assertTrue(np.any(a[key] != b[key]))
+                else:
+                    np.testing.assert_array_equal(a[key], b[key], err_msg=f'{stem} {key} changed')
+            self.assertEqual((source / f'{stem}_object.obj').read_bytes(),
+                             (candidate / f'{stem}_object.obj').read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()

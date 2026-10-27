@@ -223,3 +223,29 @@ whole**. Its 745 changed packed rows are exclusively object translation/scale;
 body, mesh, rotation and frame IDs are unchanged. Object self-acceleration is
 not official ACC-O error. The stage-8 review generator was repaired and its
 VDA stool page rebuilt at `logs/beta/ripple_stool/08_final/index.html`.
+
+## Stage-7 translation smoothing ablation (local only; episodes 8, 16, 25, 28)
+
+Current `stage7_smooth.py` uses `--lam_t 50`. Isolated `smooth_t15` and
+`smooth_t150` trials use the same production stage-6 poses, the same rotation
+smoothing, and re-run stage 8; their partial Parquets are **not uploadable**.
+Matched control is `logs/eval/beta/prodnow` on exactly these four episodes.
+
+| matched mean | production λ=50 | weaker λ=15 | stronger λ=150 |
+|---|---:|---:|---:|
+| object self-acceleration cm/frame² | 0.1672 | **0.2300 (worse)** | 0.1225 |
+| PEN cm | 0.1639 | 0.1582 | 0.1665 |
+| gap cm | 0.10 | 0.29 | 0.13 |
+| contact fraction | 0.668 | 0.645 | 0.665 |
+
+Weaker smoothing changed episode 25's object size by −0.075 (stage-8 scale
+reselection) and moved its object up to 26 cm on scored frames. **Reject it.**
+Stronger smoothing preserved all object sizes, body parameters, meshes,
+rotations and frame IDs; only object translations changed. It lowered local
+self-acceleration on all four episodes, but this is **not the reference-based
+Kaggle ACC-O error**. Episode 25 still has a 7.6 cm maximum displacement
+(3.8 cm scored-frame p95) relative to production, so review transitions.
+The six-frame sheet and stage-7 checks are under `experiments/smooth_t150/review7/`;
+episodes 8, 16, 28 pass; episode 25 has a warning from a large correction to
+already-bad stage-6 outlier frames. Result sheets for 16 and 25 are under
+`experiments/smooth_t150/review_final/`. No change is promoted or submitted yet.
