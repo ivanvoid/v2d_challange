@@ -184,8 +184,8 @@ by its separate gated checkpoint/runtime and cannot be inferred from this diagno
 ## VDA depth ablation (local only; stool episodes 24–26)
 
 `ripple_stool`: Video Depth Anything depth with production SAM3D mesh and no CoTracker. All
-stages 1–8 completed; the stage-8 review generator still crashes on obsolete `variants`
-in `scale_match.json`, but the episode outputs and six-frame `*_result.png` files exist.
+stages 1–8 completed; the stage-8 review initially crashed on obsolete `variants`
+in `scale_match.json`. The generator was subsequently fixed and its episode pages rebuilt.
 Compare to the **current** control `logs/eval/beta/prodnow`, not the runner's old-baseline compare log.
 
 | matched mean over ep 24–26 | current production | VDA |
@@ -249,3 +249,15 @@ The six-frame sheet and stage-7 checks are under `experiments/smooth_t150/review
 episodes 8, 16, 28 pass; episode 25 has a warning from a large correction to
 already-bad stage-6 outlier frames. Result sheets for 16 and 25 are under
 `experiments/smooth_t150/review_final/`. No change is promoted or submitted yet.
+
+A *separate* full-file ACC-O ablation is packed at
+`experiments/smooth_t150_full/track1.parquet` (SHA-256
+`4cdab16befc4dfa725c643a5479493d6c0b4756b8a91de2bd7b633ee64ff430a`).
+It uses **experiment 2 as its control**, not the later PEN correction: all
+740,780 rows are present; exactly 1,060 object-translation rows differ, in
+episodes 8, 16, 25 and 28 only. The body, meshes, object rotations, scales
+and all other episodes are byte-equivalent to experiment 2. The kit's local
+schema validator passes and tests verify the episode NPZs. It embeds commit
+`1b915846561405db43156418f104caad051eceab`, which must be pushed before
+any submission. This ablation has **no Kaggle score** yet; the proxy decrease
+does not establish an ACC-O gain against the hidden reference.
