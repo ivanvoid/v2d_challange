@@ -2,10 +2,12 @@
 import sys
 import unittest
 from pathlib import Path
+import json
 
 T1=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(T1))
 from held_hoop_gate import compare_held_hoop  # noqa: E402
+import paths  # noqa: E402
 
 
 class HeldHoopGate(unittest.TestCase):
@@ -21,6 +23,15 @@ class HeldHoopGate(unittest.TestCase):
         self.assertFalse(compare_held_hoop(before,after,list(range(20)))['pass'])
         with self.assertRaises(ValueError):
             compare_held_hoop(before,after,[30])
+
+    def test_completed_visibility_pilot_did_not_recover_scored_coverage(self):
+        path = paths.DATA / 'experiments/hoop_vis_v1/stage6_gate.json'
+        if not path.exists():
+            self.skipTest('episode-1 held-hoop pilot not yet evaluated')
+        r = json.loads(path.read_text())
+        self.assertFalse(r['pass'])
+        self.assertGreater(r['after']['lost_fraction'], r['before']['lost_fraction'])
+        self.assertFalse(r['checks']['lost_stretches'])
 
 
 if __name__=='__main__':

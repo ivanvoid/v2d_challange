@@ -368,3 +368,11 @@ almost the same as production (only ~0.2–0.3 cm translation difference;
 corrected mask helped the metric's target, not the 3D trajectory. **No hoop
 submission assembled** from this rejected run. Full verdict in
 `docs/STAGE_AUDIT_2026-10-27.md`.
+
+**Held-hoop episode-1 visibility-anchor pilot:** no mask or mesh was changed.
+Seven anchors were proposed, but the first three early attempts had best IoU
+0.00/0.13/0.23 and were rejected. Scored-frame lost share worsened
+32.8%→33.9% with no meaningful IoU improvement. The independent gate at
+`experiments/hoop_vis_v1/stage6_gate.json` rejected the run; no submission
+file was produced. Future anchor search must validate registration fit rather
+than rely on maximum visible mask area.

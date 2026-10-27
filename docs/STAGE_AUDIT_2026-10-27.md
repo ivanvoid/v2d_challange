@@ -105,6 +105,26 @@ needs isolated stages 7–8, packed proxies, overlay review and physical size
 validation before assembling an episode-1-only full-file candidate. The
 experiment is not a submission or a claim of metric improvement.
 
+**Episode-1 held-hoop result — REJECT:** visibility selection proposed seven
+anchor frames, but proposed early video frames 153, 201 and 262 registered
+at IoU **0.00, 0.13 and 0.23** and were dropped. Only frames 380/460/468
+survived as anchors. On the exact 174 scored frames, median IoU
+0.3545→0.3563, lost share **32.8%→33.9%**, large rotations 2→3, and
+translation-step p99 13.84→14.33 cm. The predeclared lost-coverage gate
+failed; see `experiments/hoop_vis_v1/stage6_gate.json`. No stage-7/8 rerun,
+full submission or Kaggle upload was made from this pilot.
+
+This establishes two distinct failure modes: late **filled-hole segmentation**
+in episode 0, and **anchor registration under holding/occlusion** in episode 1.
+The next algorithmic test should evaluate multiple registration frames per
+anchor window against silhouette *and* temporally consistent hypotheses,
+preferably on a short pilot. Do not equate the largest observed mask area with
+the best registration frame; video frame 153 disproves that heuristic.
+
+**Overnight conclusion:** neither tested hoop intervention passed independent
+scored-frame safeguards. A new hoop submission is **not prepared** rather than
+mislabel a mask-IoU improvement as CD-O/ACC-O progress.
+
 **Provenance:** user-provided physical priors, local images, public scorer and
 control proxies; no organizer reference poses/meshes were available. Production
 `out/`, `submission/`, baseline Parquets and the official scorer were not edited.
