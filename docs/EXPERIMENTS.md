@@ -169,3 +169,24 @@ penetration improvement and did not change any submission. It indicates that bou
 MHR finger-pose refinement is technically possible without installing another model. The proper
 next experiment needs actual budgeted-mesh signed depth, finger-pose and reprojection priors,
 and the same packed-output guardrails as the object-only trial.
+
+## VDA depth ablation (local only; stool episodes 24–26)
+
+`ripple_stool`: Video Depth Anything depth with production SAM3D mesh and no CoTracker. All
+stages 1–8 completed; the stage-8 review generator still crashes on obsolete `variants`
+in `scale_match.json`, but the episode outputs and six-frame `*_result.png` files exist.
+Compare to the **current** control `logs/eval/beta/prodnow`, not the runner's old-baseline compare log.
+
+| matched mean over ep 24–26 | current production | VDA |
+|---|---:|---:|
+| local PEN (cm) | 0.0181 | 0.0022 |
+| hand–object gap (cm) | 6.95 | **12.57** |
+| contact fraction | 0.328 | **0.167** |
+| object size (m) | 0.552 | 0.629 |
+| body minus object depth (cm) | −8.8 | −28.1 |
+
+Episode 25's gap worsened 0 → 9.7 cm and contact 63% → 26%; episode 26's gap
+15.6 → 19.3 cm. The PEN reduction is not evidence of improvement when the object moves
+away from the hands. Do **not** substitute VDA into a submission on this evidence.
+Review: `logs/beta/ripple_stool/07_smooth/index.html` and
+`logs/beta/ripple_stool/08_final/review/episode_000025_result.png`.
