@@ -261,3 +261,11 @@ schema validator passes and tests verify the episode NPZs. It embeds commit
 `1b915846561405db43156418f104caad051eceab`, which must be pushed before
 any submission. This ablation has **no Kaggle score** yet; the proxy decrease
 does not establish an ACC-O gain against the hidden reference.
+
+**Full 30-episode check completed** (`experiments/smooth_t150_full/compare_production.json`):
+local object self-acceleration 0.112164→0.106191 cm/frame² (−0.005973), PEN
+0.055463→0.055814 cm (+0.000352), contact 0.488920→0.488524 and gap
+4.651899→4.656379 cm. Only the four intended episodes change. This is a
+clean ACC-O benchmark ablation if a Kaggle submission slot is available, but
+self-acceleration is not the scored ACC-O error. Keep it separate from
+`penfix_smooth` until the ACC-O benchmark result is known.
