@@ -259,13 +259,43 @@ episodes 8, 16, 25 and 28 only. The body, meshes, object rotations, scales
 and all other episodes are byte-equivalent to experiment 2. The kit's local
 schema validator passes and tests verify the episode NPZs. It embeds commit
 `1b915846561405db43156418f104caad051eceab`, which must be pushed before
-any submission. This ablation has **no Kaggle score** yet; the proxy decrease
-does not establish an ACC-O gain against the hidden reference.
+any submission. At the time of local validation this ablation had no Kaggle
+score; the proxy decrease did not establish an ACC-O gain against the hidden reference.
 
 **Full 30-episode check completed** (`experiments/smooth_t150_full/compare_production.json`):
 local object self-acceleration 0.112164→0.106191 cm/frame² (−0.005973), PEN
 0.055463→0.055814 cm (+0.000352), contact 0.488920→0.488524 and gap
 4.651899→4.656379 cm. Only the four intended episodes change. This is a
-clean ACC-O benchmark ablation if a Kaggle submission slot is available, but
-self-acceleration is not the scored ACC-O error. Keep it separate from
-`penfix_smooth` until the ACC-O benchmark result is known.
+clean ACC-O benchmark ablation, but self-acceleration is not the scored ACC-O
+error. The subsequently user-reported Kaggle result appears below; keep it
+separate from `penfix_smooth` when attributing that score.
+
+**Later user-reported Kaggle result for `smooth_t150_full` (receipt not inspected):**
+CD-H 15.97370, CD-O 30.92902, ACC-H 0.17421, ACC-O **0.11826**, PEN 0.04505.
+Against experiment 2 ACC-O is 0.12346→0.11826, CD-O 30.95621→30.92902,
+PEN approximately unchanged; against `penfix_smooth` ACC-O improves but PEN
+returns to the experiment-2 level. The local CD-H-provenance anomaly remains.
+
+## Stationary-stool multi-frame pose trial (local only; episodes 24 and 26)
+
+The user confirmed that the stool does **not move throughout either video**;
+episode 25 is not assumed stationary, and the camera is fixed only per video.
+`track1/stationary_stool.py` uses 5 high-visibility anchors distributed across
+each clip to select one existing final mesh pose by median mask IoU at *other*
+anchor frames, then validates it on 66/71 held-out clear frames. It does not
+change the camera or any body parameter, object mesh or scale. It writes one
+constant object R,t for the whole video directly into isolated submission NPZs,
+so later stage-8 scale selection cannot undo the stationarity.
+
+| Episode | held-out IoU original → stationary | max translation change | local object self-acceleration |
+|---|---:|---:|---:|
+| 24 | 0.819 → 0.833 | 5.48 cm | 0.034 → 0 |
+| 26 | 0.774 → 0.786 | 7.41 cm | 0.039 → 0 |
+
+The episode-24 hand-gap proxy rises 5.19→7.02 cm, but continuous hand contact
+is **not** a valid stool prior when sitting, so do not retune the stool position
+to minimize it. Episode 25 is untouched. The result is a *physical-stationarity
+hypothesis*, not proof of improvement against hidden ACC-O/CD-O reference data;
+check packed structure, the reviewed overlays and Kaggle metrics before promotion.
+Files and frame-index/holdout tests: `experiments/stool_static_v1/` and
+`track1/tests/test_stationary_stool.py`.
