@@ -312,7 +312,15 @@ are identical. The full 740,780-row kit validator and tests pass. Matched
 Because sitting is not continuous hand contact and ACC-O scores error against
 the hidden reference, these proxies alone do not prove a benchmark gain.
 The file embeds commit `126c6c86a655ea9645ae6869786d7d8667baac89`;
-push that commit before any submission. **Not uploaded, no Kaggle score.**
+push that commit so the organizers can inspect it.
+
+**Later user-reported Kaggle result (receipt not inspected):** CD-H 15.97370,
+CD-O 30.95619, ACC-H 0.17421, ACC-O **0.11673**, PEN 0.04496. Relative to
+`smooth_t150_full`, ACC-O 0.11826→0.11673 (−0.00153 cm/frame²), CD-O
+30.92902→30.95619 (+0.02717 cm), PEN 0.04505→0.04496 (−0.00009 cm),
+human metrics unchanged. This **is** an incremental ACC-O gain, not evidence
+of a large overall reconstruction improvement. For a larger effect, investigate
+the hula hoop's poor stage-6 tracking and the filled-in late SAM2 masks.
 
 **Camera-prior check:** Stage 1 already uses AnyCalib predictions from 16
 frames evenly distributed across each video (episode 24 logged samples 0,
