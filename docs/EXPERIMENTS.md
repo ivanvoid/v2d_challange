@@ -170,6 +170,17 @@ MHR finger-pose refinement is technically possible without installing another mo
 next experiment needs actual budgeted-mesh signed depth, finger-pose and reprojection priors,
 and the same packed-output guardrails as the object-only trial.
 
+**Stop test for a finger-only pilot:** `track1/tests/test_foam_hand_overlap.py` checks
+episode 16, video frame 237, against the *packed* `penfix_smooth` mesh/body and the
+model-matched anatomical hand sample. **239 of 256 left-hand vertices are inside**;
+mean left-hand depth is about 4.3 cm, maximum about 10 cm. Perturbing all finger
+controls by 0.3 rad still moves 63 penetrating left-hand points no more than
+0.2 cm (many palm/wrist points). Only 14/256 right-hand points penetrate.
+Consequently, a small finger-only pose correction cannot remove this collision;
+the next physical-consistency experiment should jointly diagnose body-hand/object
+placement and geometry under image constraints. A full CARI4D run remains blocked
+by its separate gated checkpoint/runtime and cannot be inferred from this diagnostic.
+
 ## VDA depth ablation (local only; stool episodes 24–26)
 
 `ripple_stool`: Video Depth Anything depth with production SAM3D mesh and no CoTracker. All
@@ -190,3 +201,25 @@ Episode 25's gap worsened 0 → 9.7 cm and contact 63% → 26%; episode 26's gap
 away from the hands. Do **not** substitute VDA into a submission on this evidence.
 Review: `logs/beta/ripple_stool/07_smooth/index.html` and
 `logs/beta/ripple_stool/08_final/review/episode_000025_result.png`.
+
+**Scale-boundary follow-up (isolated stage-8-only ablation):** the VDA stool search
+selected its lower bound k=0.800 on all three episodes despite a better logged
+off-grid diagnostic on episode 25. Tests in `track1/tests/test_pose_scale_ablation.py`
+confirm this before running. Re-searching k=0.65..1.25 in steps of 0.025 on the
+same VDA outputs (`experiments/scale_rescue_vda_stool/`, partial/non-uploadable):
+
+| matched mean, episodes 24–26 | production | original VDA | VDA + expanded search |
+|---|---:|---:|---:|
+| PEN cm | 0.0181 | 0.0022 | 0.0144 |
+| hand–object gap cm | **6.95** | 12.57 | 8.03 |
+| contact fraction | **0.328** | 0.167 | 0.268 |
+| object self-acceleration | 0.118 | 0.116 | 0.104 |
+| max object size m, mean | 0.552 | 0.629 | 0.582 |
+
+Episode 25 gap 9.73→0.53 cm and contact 26%→53%, but production remains at
+0 cm/63%; episode 26 remains disconnected (15.9 cm gap). The expanded scale
+search **rescued a real integration bug but did not make VDA competitive as a
+whole**. Its 745 changed packed rows are exclusively object translation/scale;
+body, mesh, rotation and frame IDs are unchanged. Object self-acceleration is
+not official ACC-O error. The stage-8 review generator was repaired and its
+VDA stool page rebuilt at `logs/beta/ripple_stool/08_final/index.html`.

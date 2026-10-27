@@ -80,6 +80,20 @@ class PoseScaleAblation(unittest.TestCase):
         self.assertEqual(result['matched_mean']['control']['pen_cm'], 3.)
         self.assertEqual(result['matched_mean']['candidate']['pen_cm'], 2.)
 
+    def test_scale_trial_preserves_all_non_object_pose_arrays(self):
+        candidate = paths.DATA / 'experiments/scale_rescue_vda_stool/episodes'
+        source = paths.DATA / 'submission_beta/ripple_stool/episodes'
+        if not (candidate / 'episode_000026.npz').exists():
+            self.skipTest('VDA scale trial not yet complete')
+        for e in (24, 25, 26):
+            stem = f'episode_{e:06d}'
+            a, b = (np.load(folder / f'{stem}.npz') for folder in (source, candidate))
+            for key in a.files:
+                if key not in ('object_translation', 'object_scale'):
+                    np.testing.assert_array_equal(a[key], b[key], err_msg=f'{stem} {key} changed')
+            self.assertEqual((source / f'{stem}_object.obj').read_bytes(),
+                             (candidate / f'{stem}_object.obj').read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -77,7 +77,7 @@ class PenetrationContract(unittest.TestCase):
             scored_local_indices(np.array([9]), 10, 10)
 
     def test_active_stage8_does_not_run_collision_correction(self):
-        runner = (T1.parent / "run_stage.sh").read_text()
+        runner = (T1.parent / "run_stage.sh").read_text(encoding="utf-8")
         stage8 = runner.split('stage8_final() {', 1)[1].split('MHR_MODEL=', 1)[0]
         self.assertNotIn('stage8_depen.py', stage8)
         self.assertIn('--object_poses "$W/poses_final"', stage8)
