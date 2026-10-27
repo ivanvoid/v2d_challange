@@ -31,6 +31,11 @@ class StageContracts(unittest.TestCase):
         # Combined with test_hoop_mask_repair's direct mask hole checks, this
         # demonstrates that generic accepted!=correct topology for thin rings.
 
+    def test_beta_eval_defaults_to_current_production_not_old_baseline(self):
+        beta = (T1.parent / 'run_beta.sh').read_text(encoding='utf-8')
+        self.assertIn('BETA_BASELINE:-$BASEPATH/logs/eval/beta/prodnow', beta)
+        self.assertIn('current-production control missing', beta)
+
 
 if __name__ == '__main__':
     unittest.main()

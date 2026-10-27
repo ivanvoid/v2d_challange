@@ -20,7 +20,8 @@
 #                                    skipped; the first changed stage and everything after reruns
 #   submission_beta/<tag>/           episodes/, reports/, track1_partial.parquet
 #   logs/beta/<tag>/<NN_stage>/      the usual per-stage logs and review pages
-#   logs/eval/beta/<tag>/            proxies; compared with logs/eval/baseline (BETA_BASELINE)
+#   logs/eval/beta/<tag>/            proxies; compared with current production
+#                                    logs/eval/beta/prodnow (override: BETA_BASELINE)
 # EPISODES (default the debug set 6 8 17 26 28) is widened to every video of the same objects, since
 # stage 5e builds one mesh per object over all its videos. With BETA_DEPTH on, the body depth trend
 # (stage2_depth.py, cheap) is redone on the new depth; the rest of stage 2 is kept.
@@ -99,7 +100,8 @@ redo_body_depth() {  # the body depth trend follows the scene depth: redo it on 
 }
 
 evaluate() {
-    local EV="$BASEPATH/logs/eval/beta/$TAG" BASE="${BETA_BASELINE:-$BASEPATH/logs/eval/baseline}"
+    local EV="$BASEPATH/logs/eval/beta/$TAG" BASE="${BETA_BASELINE:-$BASEPATH/logs/eval/beta/prodnow}"
+    [[ -f "$BASE/proxies.json" ]] || { say "current-production control missing in $BASE: create it first or set BETA_BASELINE"; return 1; }
     mkdir -p "$EV"
     say "eval: pack + proxies -> $EV"
     "$PY_SUB" "$T1/pack_submission.py" --partial --episodes "$V2D_SUB/episodes" --out "$V2D_SUB/track1_partial.parquet" \
