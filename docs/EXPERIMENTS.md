@@ -359,5 +359,12 @@ pixels or affects the opening masks, and raised IoU of the existing saved
 ring poses on those frames from **0.279→0.636** (48 improved, 0 worsened).
 The masks reside only under `experiments/hoop_mask_v1/masks/1/`; the test is
 not ground truth and the independent gate is an isolated stage-6 rerun,
-logged at `experiments/hoop_mask_v1/stage6.log`. Do not promote solely on
-the saved-pose IoU; score tracking on unchanged/unmodified frames too.
+logged at `experiments/hoop_mask_v1/stage6.log`. The rerun **failed the
+predeclared unaffected-frame gate**: repaired scored frames 38/169 improved
+IoU 0.210→0.623 and lost share 28.9%→0%, but untouched scored frames 131/169
+worsened lost share 2.3%→22.1%. Newly tracked late poses are physically
+almost the same as production (only ~0.2–0.3 cm translation difference;
+~180° symmetric ring orientation, ~0.4–0.6 cm surface difference). A shape-
+corrected mask helped the metric's target, not the 3D trajectory. **No hoop
+submission assembled** from this rejected run. Full verdict in
+`docs/STAGE_AUDIT_2026-10-27.md`.

@@ -9,6 +9,12 @@ from hoop_trial_gate import compare_states  # noqa: E402
 from finish_hoop_trial import require_stage6_gate  # noqa: E402
 import tempfile
 import json
+import numpy as np
+import trimesh
+from scipy.spatial import cKDTree
+from scipy.spatial.transform import Rotation
+
+import paths  # noqa: E402
 
 
 class HoopTrialGate(unittest.TestCase):
@@ -40,6 +46,31 @@ class HoopTrialGate(unittest.TestCase):
                 require_stage6_gate(p)
             (p / 'stage6_gate.json').write_text(json.dumps({'pass': True}))
             self.assertTrue(require_stage6_gate(p)['pass'])
+
+    def test_mask_improvement_is_not_a_new_3d_pose_for_the_symmetric_ring(self):
+        trial = paths.DATA / 'experiments/hoop_mask_v1'
+        if not (trial / 'stage6.exit').exists():
+            self.skipTest('hoop stage-6 retrack has not completed')
+        mask_report = json.loads((trial / 'report.json').read_text())
+        self.assertGreater(mask_report['existing_pose_iou_median_after'] -
+                           mask_report['existing_pose_iou_median_before'], .3)
+        mesh = trimesh.load(paths.DATA / 'submission/episodes/episode_000000_object.obj',
+                            force='mesh', process=False)
+        sample = trimesh.sample.sample_surface(mesh, 3000, seed=13)[0]
+        for frame in (582, 600, 619):
+            clouds, translations = [], []
+            for folder in (paths.DATA / 'out/episode_000000', trial / 'out/episode_000000'):
+                row = json.loads((folder / 'poses' / f'{frame:06d}.json').read_text())
+                w, x, y, z = row['rotation']
+                rot = Rotation.from_quat([x, y, z, w]).as_matrix()
+                t = np.asarray(row['translation'])
+                translations.append(t)
+                clouds.append(sample @ rot.T + t)
+            self.assertLess(float(np.linalg.norm(translations[0]-translations[1])), .01)
+            a, b = clouds
+            symmetric_distance_m = (cKDTree(a).query(b)[0].mean() +
+                                    cKDTree(b).query(a)[0].mean()) / 2
+            self.assertLess(float(symmetric_distance_m), .01)
 
 
 if __name__ == '__main__':

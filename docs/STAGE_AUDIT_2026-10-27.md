@@ -63,6 +63,29 @@ through `track1_meta.json.frame_offset`, unless stated as full-video counts.
    episode and the body's parameters, then request Kaggle scoring. Do not
    claim CD-O or ACC-O improvements from local IoU/self-acceleration alone.
 
+## Stage-6 hoop pilot verdict — REJECT; no hoop submission produced
+
+The isolated episode-0 stage-6 run finished. On the 38 repaired **scored**
+frames, IoU 0.210→0.623 and lost share 28.9%→0% (against the repaired masks).
+But on the **131 untouched scored** frames, lost share deteriorated
+2.3%→22.1%, failing the predeclared unaffected-frame gate in
+`experiments/hoop_mask_v1/stage6_gate.json`. This was a real global tracker
+handoff regression. Do not run stages 7–8 or assemble a full submission from
+these outputs.
+
+Moreover, the before/after ring pose in late frames 582/600/619 differs by
+only ~0.2–0.3 cm in translation. The ~180° rotation difference is almost a
+symmetry of this ring: sampled posed-mesh symmetric surface distances are
+~0.4–0.6 cm. Thus the large IoU gain came mostly from repairing an incorrect
+target mask, **not** from finding a materially better object trajectory.
+`track1/tests/test_hoop_trial_gate.py` now asserts this geometric distinction.
+
+The genuine unresolved problem is to reconstruct the hoop pose through
+occlusion/holding, especially episode 1, which has no high-fit stage-6 anchors.
+A shape-aware mask can prevent incorrect diagnostics, but cannot alone solve
+that 3D ambiguity. Do not publish a next hoop submission without new image,
+depth/support or temporal pose evidence that survives holdout checks.
+
 **Provenance:** user-provided physical priors, local images, public scorer and
 control proxies; no organizer reference poses/meshes were available. Production
 `out/`, `submission/`, baseline Parquets and the official scorer were not edited.
