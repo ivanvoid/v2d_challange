@@ -89,12 +89,15 @@ stage8_final() {  # $1 = episode index: scale match -> build -> QA -> result fra
     "$PY_REVIEW" "$T1/qa_episode.py" --episode "$N" --ep_dir "$W" --sub_dir "$SUB/episodes" --spans "$SPANS" \
         --model "$MHR_MODEL" --frame_offset "$OFF" --out "$SUB/reports/$EP.json" \
         --export_body "$W/body/submitted_body.pt" 2>> "$DLOG" | grep '^\[qa' | tee -a "$PLOG"
+    [[ ${PIPESTATUS[0]} -eq 0 && -s "$SUB/reports/$EP.json" ]] || { echo "[$(date +%T)] $EP QA FAILED" | tee -a "$PLOG"; return 1; }
     FR="$(python3 -c "import sys; a,b=int(sys.argv[1]),int(sys.argv[2]); print(','.join(str(round(a+(b-a)*i/5)) for i in range(6)))" "$((FIRST - OFF))" "$((LAST - OFF))")"
     echo "[$(date +%T)]   render 6 result frames" | tee -a "$PLOG"
     "$PY_RENDER" "$CODE/render_results.py" --frames_dir "$W/frames" --intrinsics "$W/intrinsics_stable.json" \
         --body_mesh "$W/body/submitted_body.pt" --object_mesh "$SUB/episodes/${EP}_object.obj" \
         --object_poses_dir "$W/poses_final" --frames "$FR" \
-        --title "$EP submitted body (blue) + object (orange)" --output "$SDIR/review/${EP}_result.png" >> "$DLOG" 2>&1
+        --title "$EP submitted body (blue) + object (orange)" --output "$SDIR/review/${EP}_result.png" >> "$DLOG" 2>&1 \
+        || { echo "[$(date +%T)] $EP render FAILED — see $DLOG" | tee -a "$PLOG"; return 1; }
+    [[ -s "$SDIR/review/${EP}_result.png" ]] || { echo "[$(date +%T)] $EP render produced no sheet" | tee -a "$PLOG"; return 1; }
     echo "[$(date +%T)] $EP: stage 8 OK" | tee -a "$PLOG"
 }
 MHR_MODEL="$WEIGHTS/sam3d_body/sam-3d-body-dinov3/assets/mhr_model.pt"
