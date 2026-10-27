@@ -8,6 +8,12 @@ container is replaced**. This file lists everything to add to the image so that 
 Anything marked "(not verified)" was not tested when this was written. The setup logs are in
 `logs/beta/setup_<venv>.log`.
 
+**Submission packer dependency discovered in the stage-8 ablations:**
+`$V2D_DATA/.venv-submit` also needs `Pillow==11.3.0` to load a textured
+`mesh_scaled.obj` through Trimesh in `track1/build_episode.py`. Without it,
+stage 8 inference succeeds but packing fails with `No module named 'PIL'`.
+Install Pillow when rebuilding `.venv-submit`; the current container's venv has it.
+
 ## 1. What the container looks like today (found by inspection)
 
 | Item | Value |
