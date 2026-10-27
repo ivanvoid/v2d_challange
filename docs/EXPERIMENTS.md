@@ -149,3 +149,10 @@ CoCoNet experiment needs the separate gated `nvidia/cari4d_commercial` step-2000
 the CARI4D image/runtime, and accepted model terms. Neither this checkpoint nor a Docker runtime
 is currently present in this container; `HF_TOKEN` is unset. The public upstream step-031397
 checkpoint in `weights/cari4d/hf/` is not a drop-in replacement for the native-MHR model.
+As a separate one-frame feasibility probe on the existing episode-16 submission, the installed
+TorchScript MHR model produced nonzero gradients in 53 of its 54 finger-control columns from
+a **box-proxy** hand-inside-object loss (53/54, gradient L2 0.00452); this is not a real-mesh
+penetration improvement and did not change any submission. It indicates that bounded, temporal
+MHR finger-pose refinement is technically possible without installing another model. The proper
+next experiment needs actual budgeted-mesh signed depth, finger-pose and reprojection priors,
+and the same packed-output guardrails as the object-only trial.
