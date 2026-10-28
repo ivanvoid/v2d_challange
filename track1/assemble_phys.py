@@ -75,6 +75,8 @@ def main() -> None:
     ap.add_argument('--control', type=Path, required=True, help='episodes dir of the scored control')
     ap.add_argument('--trials', type=Path, nargs='+', required=True)
     ap.add_argument('--static', type=int, nargs='*', default=[24, 26])
+    ap.add_argument('--keep_control', type=int, nargs='*', default=[],
+                    help='episodes left exactly as in the control (e.g. smoothing lags real motion)')
     ap.add_argument('--no_depen', action='store_true', help='smoothing only (attribution variant)')
     ap.add_argument('--max_dev_cm', type=float, default=6.0, help='p99 scored-frame shift vs control')
     ap.add_argument('--out', type=Path, required=True)
@@ -92,7 +94,9 @@ def main() -> None:
         control = load_npz(args.control / f'{stem}.npz')
         mesh = args.control / f'{stem}_object.obj'
         choice, reason, source = 'control', 'static object', args.control
-        if e not in args.static:
+        if e in args.keep_control:
+            reason = 'kept as control'
+        elif e not in args.static:
             trial = next((t for t in args.trials if (t / 'episodes' / f'{stem}.npz').exists()), None)
             if trial is None:
                 failures.append(f'{stem}: no trial output')
