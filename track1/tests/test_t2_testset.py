@@ -10,7 +10,7 @@ T1 = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(T1))
 from t2_testset import (accel, chamfer_sum, manipulation_frames, quat_wxyz_to_matrix,  # noqa: E402
                         reference_leaks, register, rotvec_to_matrix, umeyama,
-                        human_to_opencv)
+                        human_to_opencv, registration_spread_cm)
 
 
 class T2TestSet(unittest.TestCase):
@@ -83,6 +83,13 @@ class T2TestSet(unittest.TestCase):
         f = g['frames']
         root, _ = human_to_opencv(g['human_t'][f], np.tile(np.eye(3), (len(f), 1, 1)))
         self.assertLess(np.median(np.linalg.norm(g['object_t'][f] - root, axis=1)), 1.0)
+
+    def test_a_person_standing_still_cannot_register_the_camera(self):
+        rng = np.random.default_rng(0)
+        still = rng.normal(scale=.01, size=(300, 3))
+        walk = np.c_[np.linspace(0, 1.5, 300), .1 * np.sin(np.linspace(0, 6, 300)), np.zeros(300)]
+        self.assertLess(registration_spread_cm(still)[1], 5)
+        self.assertGreater(registration_spread_cm(walk)[1], 5)
 
     def test_pipeline_root_must_not_hold_reference_data(self):
         import tempfile

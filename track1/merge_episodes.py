@@ -3,6 +3,7 @@
 
   --base   full episodes dir every other episode is copied from
   --take   DIR:E,E,...  episodes taken from DIR instead (repeatable; an episode may appear once)
+  --pose_from DIR       afterwards replace the body `pose` of every episode by DIR's (e.g. a smoothed body)
 Every episode keeps its mesh file byte-identical to --base and the same NPZ keys / shapes; the
 merged directory and a merge.json with the provenance of each episode are written to --out.
 """
@@ -33,6 +34,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--base', type=Path, required=True)
     ap.add_argument('--take', nargs='*', default=[])
+    ap.add_argument('--pose_from', type=Path, default=None)
     ap.add_argument('--out', type=Path, required=True)
     args = ap.parse_args()
     out = args.out.resolve()
@@ -51,11 +53,21 @@ def main() -> None:
             raise SystemExit(f'{stem}: NPZ layout differs between {args.base} and {src}')
         if (src / f'{stem}_object.obj').read_bytes() != (args.base / f'{stem}_object.obj').read_bytes():
             raise SystemExit(f'{stem}: object mesh differs')
+        if args.pose_from is not None:
+            body = np.load(args.pose_from / f'{stem}.npz')
+            if body['pose'].shape != new['pose'].shape or not (np.array_equal(body['scales'], new['scales'])
+                                                             and np.array_equal(body['shape'], new['shape'])):
+                raise SystemExit(f'{stem}: --pose_from body does not match (shape/identity)')
+            new = {**{k: new[k] for k in new.files}, 'pose': body['pose']}
+            np.savez(dest / f'{stem}.npz', **new)
+        else:
+            new = {k: new[k] for k in new.files}
+            shutil.copy2(src / f'{stem}.npz', dest / f'{stem}.npz')
         changed = [k for k in base.files if not np.array_equal(base[k], new[k])]
-        shutil.copy2(src / f'{stem}.npz', dest / f'{stem}.npz')
         shutil.copy2(args.base / f'{stem}_object.obj', dest / f'{stem}_object.obj')
         rows.append({'episode': e, 'source': str(src), 'changed_vs_base': changed})
-    (out / 'merge.json').write_text(json.dumps({'base': str(args.base), 'episodes': rows}, indent=1) + '\n')
+    (out / 'merge.json').write_text(json.dumps({'base': str(args.base), 'pose_from': str(args.pose_from),
+                                                'episodes': rows}, indent=1) + '\n')
     print('merged; episodes changed vs base:', {r['episode']: r['changed_vs_base'] for r in rows if r['changed_vs_base']})
 
 

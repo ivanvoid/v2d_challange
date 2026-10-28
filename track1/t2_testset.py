@@ -150,6 +150,13 @@ def reference_leaks(root: Path) -> list[str]:
     return bad
 
 
+def registration_spread_cm(root: np.ndarray) -> np.ndarray:
+    """Std of the reference root along its principal axes. A person who barely moves (the iron
+    episode 7: 1.3 cm) leaves the camera rotation unconstrained, so that episode is not scored."""
+    x = root - root.mean(0)
+    return np.sqrt(np.clip(np.sort(np.linalg.eigvalsh(np.cov(x.T)))[::-1], 0, None)) * 100
+
+
 def chamfer_sum(a: np.ndarray, b: np.ndarray) -> float:
     from scipy.spatial import cKDTree
     return float(cKDTree(b).query(a)[0].mean() + cKDTree(a).query(b)[0].mean())
@@ -261,7 +268,9 @@ def evaluate_episode(npz: Path, mesh_obj: Path, gt_npz: Path, floor: Path | None
     gap = float(np.median(np.linalg.norm(gtt - ref_root, axis=1)))
     if gap > 2.0:
         raise ValueError(f'reference object is {gap:.1f} m from the reference person: frame convention broken')
-    out = {'frames': int(len(frames)), 'ref_object_to_root_m': gap, 'registration_scale': s, 'registration_residual_cm': float(res.mean() * 100),
+    spread = registration_spread_cm(ref_root)
+    out = {'frames': int(len(frames)), 'registration_ok': bool(spread[1] >= 5.0),
+           'root_spread_cm': spread.round(1).tolist(), 'ref_object_to_root_m': gap, 'registration_scale': s, 'registration_residual_cm': float(res.mean() * 100),
            'root_offset_cm': (o * 100).round(1).tolist(),
            'cd_o': float(np.mean(cd) * 100), 'cd_o_centred': float(np.mean(cdc) * 100),
            'centroid_cm': float(np.mean(cerr) * 100), 'centroid_depth_cm': float(np.mean(cdepth) * 100),
@@ -296,11 +305,76 @@ def evaluate(args) -> None:
               f"pelvis {r['pelvis_cm']:5.1f} (depth {r['pelvis_depth_cm']:+5.1f})  reg s {r['registration_scale']:.3f} "
               f"res {r['registration_residual_cm']:.1f} floor {r.get('floor_normal_angle_deg', float('nan')):.1f} deg", flush=True)
     keys = [k for k in rows[0] if isinstance(rows[0][k], float)]
-    mean = {k: float(np.mean([r[k] for r in rows])) for k in keys}
-    print('MEAN ' + '  '.join(f'{k} {v:.3f}' for k, v in mean.items()))
+    ok = [r for r in rows if r['registration_ok']]
+    skipped = [r['episode'] for r in rows if not r['registration_ok']]
+    mean = {k: float(np.mean([r[k] for r in ok])) for k in keys} if ok else {}
+    print(f'MEAN over {len(ok)} episodes (registration too weak, not averaged: {skipped}) ' +
+          '  '.join(f'{k} {v:.3f}' for k, v in mean.items()))
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps({'episodes_dir': str(args.episodes_dir), 'mean': mean, 'episodes': rows}, indent=1) + '\n')
+
+
+def overlay(args) -> None:
+    """Contact sheet: our object (orange) and the reference object (green, mapped into our camera
+    with the same registration as `eval`) drawn on the video; our pelvis (blue) vs reference root (cyan)."""
+    import sys
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import torch
+    import trimesh
+    from PIL import Image
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import paths
+    sys.path.insert(0, str(paths.KIT_TRACK1))
+    from mesh_to_mhr_params import MHR
+    e = args.episode
+    stem = f'episode_{e:06d}'
+    W = args.root / 'out' / stem
+    g = np.load(args.gt / f'{stem}.npz')
+    d = np.load(args.episodes_dir / f'{stem}.npz')
+    K = json.loads((W / 'intrinsics_stable.json').read_text())
+    off = json.loads((W / 'track1_meta.json').read_text())['frame_offset']
+    frames = g['frames']
+    dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+    mhr = MHR(str(paths.DATA / 'weights/sam3d_body/sam-3d-body-dinov3/assets/mhr_model.pt'), dev, 64, 'float32')
+    z = torch.as_tensor(np.concatenate([d['scales'], d['shape']])[None], dtype=torch.float64, device=dev)
+    pel = mhr.run(torch.as_tensor(d['pose'][frames], dtype=torch.float64, device=dev), z)[1].cpu().numpy()[:, 1]
+    ref_root, ref_rot = human_to_opencv(g['human_t'][frames], rotvec_to_matrix(g['human_pose'][frames, :3]))
+    s, R, t, o, _ = register(pel, ref_root, ref_rot)
+    to_cam = lambda x: ((x - t) @ R) / s                                          # noqa: E731  world -> our camera
+    ours = trimesh.load(args.episodes_dir / f'{stem}_object.obj', force='mesh', process=False)
+    gts = trimesh.load(str(g['mesh']))
+    gtm = gts.dump(concatenate=True) if hasattr(gts, 'dump') else gts
+    P = trimesh.sample.sample_surface(ours, 1500, seed=0)[0]
+    G = trimesh.sample.sample_surface(gtm, 1500, seed=0)[0]
+
+    def proj(x):
+        x = x[x[:, 2] > 0.05]
+        return K['fx'] * x[:, 0] / x[:, 2] + K['cx'], K['fy'] * x[:, 1] / x[:, 2] + K['cy']
+    pick = np.linspace(0, len(frames) - 1, args.n).round().astype(int)
+    fig, axes = plt.subplots(2, (args.n + 1) // 2, figsize=(6 * ((args.n + 1) // 2), 9.5))
+    for ax, i in zip(axes.ravel(), pick):
+        f = frames[i]
+        img = Image.open(W / 'frames' / f'{f - off:06d}.png')
+        a = args.k * (float(d['object_scale']) * P @ d['object_rotation'][f].T + d['object_translation'][f])
+        b = to_cam(G @ g['object_R'][f].T + g['object_t'][f])
+        rr = to_cam(ref_root[i:i + 1] + ref_rot[i] @ o)
+        ax.imshow(img)
+        ax.scatter(*proj(b), s=1, c='lime', alpha=.5, label='reference object')
+        ax.scatter(*proj(a), s=1, c='orange', alpha=.5, label='ours')
+        ax.scatter(*proj(pel[i:i + 1]), s=60, c='blue', marker='x', label='our pelvis')
+        ax.scatter(*proj(rr), s=60, c='cyan', marker='+', label='reference root')
+        dz = (a.mean(0)[2] - b.mean(0)[2]) * 100
+        ax.set_title(f'video frame {f}: CD-O {chamfer_sum(a * s, b * s) * 100:.1f} cm, ours {dz:+.0f} cm deeper', fontsize=10)
+        ax.set_xlim(0, K['width']); ax.set_ylim(K['height'], 0); ax.axis('off')
+    axes.ravel()[0].legend(loc='upper left', markerscale=6, fontsize=8)
+    fig.suptitle(f'{stem} ({g["object"]}) — {args.episodes_dir} — object depth x{args.k}', fontsize=12)
+    fig.tight_layout()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(args.out, dpi=70)
+    print('wrote', args.out)
 
 
 def main() -> None:
@@ -316,8 +390,16 @@ def main() -> None:
     b.add_argument('--episodes_dir', type=Path, required=True)
     b.add_argument('--episodes', type=int, nargs='+', required=True)
     b.add_argument('--out', type=Path)
+    c = sub.add_parser('overlay')
+    c.add_argument('--root', type=Path, required=True)
+    c.add_argument('--gt', type=Path, required=True)
+    c.add_argument('--episodes_dir', type=Path, required=True)
+    c.add_argument('--episode', type=int, required=True)
+    c.add_argument('--k', type=float, default=1.0, help='scale our object about the camera (depth test)')
+    c.add_argument('--n', type=int, default=6)
+    c.add_argument('--out', type=Path, required=True)
     args = ap.parse_args()
-    setup(args) if args.cmd == 'setup' else evaluate(args)
+    {'setup': setup, 'eval': evaluate, 'overlay': overlay}[args.cmd](args)
 
 
 if __name__ == '__main__':
