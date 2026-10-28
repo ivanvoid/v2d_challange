@@ -24,7 +24,7 @@ the object translation per scored stretch (jitter, not the error).
 | 3 | 2026-10-27 | penfix_smooth | `fd79f96` | stage-8-only bounded smooth object translation on foam episodes 15–17; scores reported by user, receipt/upload hash pending | 15.9737* | 30.9978 | 0.17421 | 0.12355 | 0.03349 | 0.0396 | 4.70 | 0.487 | 0.130 | 0.112 | `experiments/penfix_smooth/track1.parquet` |
 | 6 | 2026-10-28 | phys_v1 | `7ad2b63` | object_translation only: lam_t 150 on all moving episodes (depth placement pinned), PEN push-out where it passes fit+holdout, stools static; control = stool_static_plus_smooth_t150 | 15.9737 | 31.04288 | 0.17421 | **0.10316** | **0.02742** | 0.0321 | 4.79 | 0.482 | 0.130 | 0.086 | `experiments/phys_v1/track1.parquet` |
 | 7 | 2026-10-28 | phys_v2 | `35fa94d` | phys_v1 + body smoothing sigma 4 (smooth_body.py) + PEN squeeze (push-out <= 5 cm, foam 15/16 scale x0.92) | **15.85675** | 31.04884 | **0.14125** | 0.10539 | **0.01246** | 0.0135 | 4.92 | 0.479 | 0.065 | 0.089 | `experiments/phys_v2/track1.parquet` |
-| 8 | 2026-10-28 | phys_v3 | `23468f3` | phys_v2 + object lam_t 1000 + object depth x1.04 (not 7 8 15-17) + PEN squeeze redo; tuned on the Track 2 local test set | pending | pending | pending | pending | pending | 0.0191 | 6.87 | 0.459 | 0.065 | 0.058 | `experiments/phys_v3/track1.parquet` |
+| 8 | 2026-10-28 | phys_v3 | `23468f3` | phys_v2 + object lam_t 1000 + object depth x1.04 (not 7 8 15-17) + PEN squeeze redo; tuned on the Track 2 local test set | 15.85675 | **37.06158** | 0.14125 | **0.08468** | 0.01517 | 0.0191 | 6.87 | 0.459 | 0.065 | 0.058 | `experiments/phys_v3/track1.parquet` |
 
 ## Notes per experiment
 
@@ -39,6 +39,14 @@ constant-velocity guess.
   drove the hands into the object), PEN squeeze redone. Test set: CD-O 20.7 -> 16.1, ACC-O 0.150 -> 0.102.
 * local: PEN 0.0135 -> 0.0191, accO(self) 0.089 -> 0.058, gap 4.92 -> 6.87 cm. The gap proxy also
   worsens on the test set while CD-O improves there, so it is not the guide at this scale.
+* **Kaggle (user-reported): CD-O 31.04884 -> 37.06158 (+6.0, WRONG direction), ACC-O 0.10539 -> 0.08468
+  (-0.021, as the test set predicted), PEN 0.01246 -> 0.01517, CD-H/ACC-H unchanged.** The depth x1.04
+  did not transfer: same sign and size as p1_global (+5.9 for 8 episodes x1.07-1.16). The local
+  gap/contact proxy (worse) was right; the test-set depth result was wrong. Suspected cause: the
+  test set's scored frames (motion span +-15 frames) are not contact frames, so stage 8's contact
+  placement there is biased in a way Track 1 (true contact frames) is not. lam 1000 is confirmed.
+  Next: phys_v4 = phys_v3 without the depth change; test-set depth conclusions are on hold until
+  its scored frames behave like Track 1's.
 
 
 **7 · phys_v2 (prepared 2026-10-28, not uploaded)** — control phys_v1.
