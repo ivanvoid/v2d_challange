@@ -25,6 +25,7 @@ the object translation per scored stretch (jitter, not the error).
 | 6 | 2026-10-28 | phys_v1 | `7ad2b63` | object_translation only: lam_t 150 on all moving episodes (depth placement pinned), PEN push-out where it passes fit+holdout, stools static; control = stool_static_plus_smooth_t150 | 15.9737 | 31.04288 | 0.17421 | **0.10316** | **0.02742** | 0.0321 | 4.79 | 0.482 | 0.130 | 0.086 | `experiments/phys_v1/track1.parquet` |
 | 7 | 2026-10-28 | phys_v2 | `35fa94d` | phys_v1 + body smoothing sigma 4 (smooth_body.py) + PEN squeeze (push-out <= 5 cm, foam 15/16 scale x0.92) | **15.85675** | 31.04884 | **0.14125** | 0.10539 | **0.01246** | 0.0135 | 4.92 | 0.479 | 0.065 | 0.089 | `experiments/phys_v2/track1.parquet` |
 | 8 | 2026-10-28 | phys_v3 | `23468f3` | phys_v2 + object lam_t 1000 + object depth x1.04 (not 7 8 15-17) + PEN squeeze redo; tuned on the Track 2 local test set | 15.85675 | **37.06158** | 0.14125 | **0.08468** | 0.01517 | 0.0191 | 6.87 | 0.459 | 0.065 | 0.058 | `experiments/phys_v3/track1.parquet` |
+| 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | pending | pending | pending | pending | pending | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
 
 ## Notes per experiment
 
