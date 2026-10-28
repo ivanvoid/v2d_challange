@@ -58,6 +58,8 @@ def main() -> None:
     ap.add_argument('--k_min', type=float, default=0.8)
     ap.add_argument('--k_max', type=float, default=1.25)
     ap.add_argument('--k_step', type=float, default=0.025)
+    ap.add_argument('--pin_source_scale', action='store_true',
+                    help="stage 8 reuses each source episode's chosen mode and k (depth placement unchanged)")
     args = ap.parse_args()
     data = paths.DATA.resolve()
     src, trial = args.src.resolve(), args.trial.resolve()
@@ -76,9 +78,13 @@ def main() -> None:
         if args.mode == 'smooth':
             subprocess.run([str(PY_REVIEW), str(ROOT / 'stage7_smooth.py'), '--episode', str(e),
                             '--out_root', str(out), '--lam_t', str(args.lam_t)], env=env, check=True)
+        pin = []
+        if args.pin_source_scale:
+            best = json.loads((src / stem / 'track/scale_match.json').read_text())['best']
+            pin = ['--pin', f"{best['mode']}:{best['k']}"]
         subprocess.run([str(PY_REVIEW), str(ROOT / 'stage8_scale.py'), '--episode', str(e),
                         '--out_root', str(out), '--model', str(MHR), '--k_min', str(args.k_min),
-                        '--k_max', str(args.k_max), '--k_step', str(args.k_step)], env=env, check=True)
+                        '--k_max', str(args.k_max), '--k_step', str(args.k_step), *pin], env=env, check=True)
         offset = json.loads((src / stem / 'track1_meta.json').read_text())['frame_offset']
         subprocess.run([str(PY_SUB), str(ROOT / 'build_episode.py'), '--episode', str(e),
                         '--ep_dir', str(out / stem), '--object_poses', str(out / stem / 'poses_final'),
@@ -90,6 +96,7 @@ def main() -> None:
     manifest = {"mode": args.mode, "source": str(src), "episodes": args.episodes, "gpu": args.gpu,
                 "lam_t": args.lam_t if args.mode == 'smooth' else None,
                 "k_min": args.k_min, "k_max": args.k_max, "k_step": args.k_step,
+                "pin_source_scale": args.pin_source_scale,
                 "partial_parquet": str(parquet), "uploadable": False}
     (trial / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
 

@@ -68,6 +68,17 @@ def candidate_scales(k_min: float, k_max: float, k_step: float) -> np.ndarray:
     return np.round(np.arange(k_min, k_max + 1e-9, k_step), 4)
 
 
+def parse_pin(text: str) -> tuple[str, float]:
+    """'follow:1.125' -> ('follow', 1.125); the placement modes stage 8a writes."""
+    mode, _, k = text.partition(":")
+    if mode not in ("fixed", "follow") or not k:
+        raise ValueError(f"--pin expects fixed:K or follow:K, got {text!r}")
+    k = round(float(k), 4)
+    if k <= 0:
+        raise ValueError("pinned k must be positive")
+    return mode, k
+
+
 def load_depth(path):
     px = cv2.imread(path, cv2.IMREAD_UNCHANGED).astype(np.float32)
     return 1.0 / np.maximum(px / 65535.0, 1e-6) - 1.0
@@ -99,6 +110,8 @@ def main() -> None:
     ap.add_argument("--k_min", type=float, default=0.80)
     ap.add_argument("--k_max", type=float, default=1.25)
     ap.add_argument("--k_step", type=float, default=0.025)
+    ap.add_argument("--pin", default=None, help="MODE:K, e.g. follow:1.125 — keep an earlier placement "
+                    "(isolated experiments that must not move the object's depth); the table still logs k=1")
     ap.add_argument("--hand_points", type=int, default=512)
     ap.add_argument("--spans", default=str(paths.DATA / "submission" / "scored_spans.json"))
     args = ap.parse_args()
@@ -165,7 +178,8 @@ def main() -> None:
                 "pen_cm": float(pen.mean()),
                 "score": float(np.median(excess) + args.pen_weight * pen.mean())}
 
-    ks = candidate_scales(args.k_min, args.k_max, args.k_step)
+    pin = parse_pin(args.pin) if args.pin else None
+    ks = np.array(sorted({1.0, pin[1]})) if pin else candidate_scales(args.k_min, args.k_max, args.k_step)
     table = []
     for mode in ("fixed", "follow"):
         for k in ks:
@@ -175,6 +189,8 @@ def main() -> None:
     top = min(r["score"] for r in table)
     near = [r for r in table if r["score"] <= top + args.tie]
     best = min(near, key=lambda r: (abs(np.log(r["k"])), r["mode"] != "fixed", r["score"]))
+    if pin:
+        best = next(r for r in table if r["mode"] == pin[0] and abs(r["k"] - pin[1]) < 1e-9)
     runner = min((r for r in table if r is not best), key=lambda r: r["score"])
     legacy = {"none": next(r for r in table if r["mode"] == "fixed" and abs(r["k"] - 1) < 1e-9)}
     legacy["global"] = {"k": s_global, **evaluate(np.full(n, s_global), s_global)}
