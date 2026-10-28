@@ -23,8 +23,18 @@ the object translation per scored stretch (jitter, not the error).
 | 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | 15.716 | 30.956 | 0.1742 | 0.1235 | 0.0451 | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
 | 3 | 2026-10-27 | penfix_smooth | `fd79f96` | stage-8-only bounded smooth object translation on foam episodes 15–17; scores reported by user, receipt/upload hash pending | 15.9737* | 30.9978 | 0.17421 | 0.12355 | 0.03349 | 0.0396 | 4.70 | 0.487 | 0.130 | 0.112 | `experiments/penfix_smooth/track1.parquet` |
 | 6 | 2026-10-28 | phys_v1 | `7ad2b63` | object_translation only: lam_t 150 on all moving episodes (depth placement pinned), PEN push-out where it passes fit+holdout, stools static; control = stool_static_plus_smooth_t150 | 15.9737 | 31.04288 | 0.17421 | **0.10316** | **0.02742** | 0.0321 | 4.79 | 0.482 | 0.130 | 0.086 | `experiments/phys_v1/track1.parquet` |
+| 7 | 2026-10-28 | phys_v2 | `35fa94d` | phys_v1 + body smoothing sigma 4 (smooth_body.py) + PEN squeeze (push-out <= 5 cm, foam 15/16 scale x0.92) | pending | pending | pending | pending | pending | 0.0135 | 4.92 | 0.479 | 0.065 | 0.089 | `experiments/phys_v2/track1.parquet` |
 
 ## Notes per experiment
+
+**7 · phys_v2 (prepared 2026-10-28, not uploaded)** — control phys_v1.
+* body: `smooth_body.py --sigma 4` (MHR pose; Euler-switch-safe). Chosen on the Track 2 local test set
+  (6 episodes, pelvis vs reference root only — no reference body model for the other joints): pelvis
+  ACC error 0.149 -> 0.122, position 2.46 -> 2.39 cm. Two naive variants were rejected there
+  (spikes at Euler switches); see the module docstring.
+* PEN: `pen_squeeze.py` push-out up to 5 cm; foam 15/16 object x0.92 (two hands squeezing).
+  Local PEN 0.0321 -> 0.0135, accH(self) 0.130 -> 0.065, accO(self) 0.086 -> 0.089, gap 4.79 -> 4.92.
+
 
 **6 · phys_v1 (prepared 2026-10-28, not uploaded)** — the physical-plausibility half of the score
 (ACC-O, PEN), extending two fixes that Kaggle already confirmed on a few episodes to all of them.
