@@ -141,6 +141,9 @@ def main() -> None:
     # object_overrides.json "force_candidate": "<episode>:cand_<N>" — a reviewed choice replaces the automatic one
     # (the outline score cannot tell a handle-less blob from the clean object: iron). Only that candidate is tested.
     forced = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "object_overrides.json"))).get(args.object, {}).get("force_candidate")
+    if forced and int(forced.split(":")[0]) not in videos:
+        log(f"  {args.object}: force_candidate {forced} names a video that is not part of this run — ignored")
+        forced = None
     if forced:
         fe, fc = forced.split(":")
         fpath = os.path.join(videos[int(fe)]["W"], "mesh", fc)

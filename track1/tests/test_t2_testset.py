@@ -9,7 +9,8 @@ from scipy.spatial.transform import Rotation
 T1 = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(T1))
 from t2_testset import (accel, chamfer_sum, manipulation_frames, quat_wxyz_to_matrix,  # noqa: E402
-                        reference_leaks, register, rotvec_to_matrix, umeyama)
+                        reference_leaks, register, rotvec_to_matrix, umeyama,
+                        human_to_opencv)
 
 
 class T2TestSet(unittest.TestCase):
@@ -66,6 +67,22 @@ class T2TestSet(unittest.TestCase):
         p = np.zeros((4, 3)); q = p + [0, 0, .1]
         self.assertAlmostEqual(chamfer_sum(p, q), .2)                             # 0.1 each way, summed
 
+
+    def test_human_frame_flip_is_an_involution_and_a_rotation(self):
+        R = Rotation.from_rotvec([.3, -1.2, .4]).as_matrix()
+        t, R2 = human_to_opencv(np.array([[1., 2, 3]]), R)
+        np.testing.assert_allclose(t, [[1, -2, -3]])
+        self.assertAlmostEqual(np.linalg.det(R2), 1.0)
+        np.testing.assert_allclose(human_to_opencv(t, R2)[1], R, atol=1e-12)
+
+    def test_reference_person_and_object_share_a_frame_after_the_flip(self):
+        gt = Path('/local-data/ivan/v2d_t2eval/gt/episode_000009.npz')
+        if not gt.exists():
+            self.skipTest('reference not extracted')
+        g = np.load(gt)
+        f = g['frames']
+        root, _ = human_to_opencv(g['human_t'][f], np.tile(np.eye(3), (len(f), 1, 1)))
+        self.assertLess(np.median(np.linalg.norm(g['object_t'][f] - root, axis=1)), 1.0)
 
     def test_pipeline_root_must_not_hold_reference_data(self):
         import tempfile
