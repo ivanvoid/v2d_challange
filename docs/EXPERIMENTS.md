@@ -22,7 +22,7 @@ the object translation per scored stretch (jitter, not the error).
 | 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
 | 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | 15.716 | 30.956 | 0.1742 | 0.1235 | 0.0451 | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
 | 3 | 2026-10-27 | penfix_smooth | `fd79f96` | stage-8-only bounded smooth object translation on foam episodes 15–17; scores reported by user, receipt/upload hash pending | 15.9737* | 30.9978 | 0.17421 | 0.12355 | 0.03349 | 0.0396 | 4.70 | 0.487 | 0.130 | 0.112 | `experiments/penfix_smooth/track1.parquet` |
-| 6 | 2026-10-28 | phys_v1 | `7ad2b63` | object_translation only: lam_t 150 on all moving episodes (depth placement pinned), PEN push-out where it passes fit+holdout, stools static; control = stool_static_plus_smooth_t150 | pending | pending | pending | pending | pending | 0.0321 | 4.79 | 0.482 | 0.130 | 0.086 | `experiments/phys_v1/track1.parquet` |
+| 6 | 2026-10-28 | phys_v1 | `7ad2b63` | object_translation only: lam_t 150 on all moving episodes (depth placement pinned), PEN push-out where it passes fit+holdout, stools static; control = stool_static_plus_smooth_t150 | 15.9737 | 31.04288 | 0.17421 | **0.10316** | **0.02742** | 0.0321 | 4.79 | 0.482 | 0.130 | 0.086 | `experiments/phys_v1/track1.parquet` |
 
 ## Notes per experiment
 
@@ -40,6 +40,11 @@ must not move.
   (`track1/assemble_phys.py`); accepted on 6 7 8 9 10 11 15 16 17 20 25 27 28 29
 * local: PEN 0.0556 -> 0.0321 cm, accO(self) 0.104 -> 0.086, gap 4.71 -> 4.79 cm, contact 0.487 -> 0.482
 * prediction: PEN ~0.026 on Kaggle (control's Kaggle/local ratio 0.81), ACC-O lower, CD-O within ~0.1
+* **Kaggle (user-reported 2026-10-28): PEN 0.04496 -> 0.02742 (-39%), ACC-O 0.11673 -> 0.10316 (-0.0136),
+  CD-O 30.95619 -> 31.04288 (+0.087), CD-H / ACC-H unchanged as required.** Kaggle/local PEN ratio 0.854.
+  The small CD-O cost matches penfix_smooth (+0.042 for 3 episodes): the push-out moves objects
+  off the hands by up to 3 cm. Physical-plausibility fixes work as predicted; the remaining ACC-O gap
+  to the leaders (0.069) is the next target, tuned on the Track 2 local test set.
 
 
 **1 · p1_global** — question: should the object live in the body's depth scale ("global") or in
