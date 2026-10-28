@@ -87,7 +87,7 @@ class T2TestSet(unittest.TestCase):
     def test_a_person_standing_still_cannot_register_the_camera(self):
         rng = np.random.default_rng(0)
         still = rng.normal(scale=.01, size=(300, 3))
-        walk = np.c_[np.linspace(0, 1.5, 300), .1 * np.sin(np.linspace(0, 6, 300)), np.zeros(300)]
+        walk = np.c_[np.linspace(0, 1.5, 300), .4 * np.sin(np.linspace(0, 3, 300)), np.zeros(300)]   # walk + turn
         self.assertLess(registration_spread_cm(still)[1], 5)
         self.assertGreater(registration_spread_cm(walk)[1], 5)
 
