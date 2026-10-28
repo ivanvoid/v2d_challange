@@ -22,8 +22,25 @@ the object translation per scored stretch (jitter, not the error).
 | 1 | 2026-10-19 | p1_global | `899c80e` | episodes 0 1 8 14 25 27 28 29: stage-8 scale variant "none" → "global" (object translation and size × s_global 1.07–1.16) | 15.716 | **43.294** | 0.1745 | 0.1306 | 0.0889 | 0.0850 | 16.06 | 0.417 | 0.131 | 0.118 | `experiments/p1_global/track1.parquet` |
 | 2 | 2026-10-22 | stage67_v2 | `8873d07` | stages 5e-8 re-run: new 5e meshes (iron forced to ep 6 frame 723), new stage 6 tracker (re-find, states), stage 7 hidden frames interpolated, stage 8 fixed/follow scale | 15.716 | 30.956 | 0.1742 | 0.1235 | 0.0451 | 0.0555 | 4.65 | 0.489 | 0.130 | 0.112 | `experiments/stage67_v2/track1.parquet` |
 | 3 | 2026-10-27 | penfix_smooth | `fd79f96` | stage-8-only bounded smooth object translation on foam episodes 15–17; scores reported by user, receipt/upload hash pending | 15.9737* | 30.9978 | 0.17421 | 0.12355 | 0.03349 | 0.0396 | 4.70 | 0.487 | 0.130 | 0.112 | `experiments/penfix_smooth/track1.parquet` |
+| 6 | 2026-10-28 | phys_v1 | `7ad2b63` | object_translation only: lam_t 150 on all moving episodes (depth placement pinned), PEN push-out where it passes fit+holdout, stools static; control = stool_static_plus_smooth_t150 | pending | pending | pending | pending | pending | 0.0321 | 4.79 | 0.482 | 0.130 | 0.086 | `experiments/phys_v1/track1.parquet` |
 
 ## Notes per experiment
+
+**6 · phys_v1 (prepared 2026-10-28, not uploaded)** — the physical-plausibility half of the score
+(ACC-O, PEN), extending two fixes that Kaggle already confirmed on a few episodes to all of them.
+Control: `stool_static_plus_smooth_t150` (Kaggle ACC-O 0.11673, PEN 0.04496). Only object
+translations change (8,727 rows); body, rotation, scale and meshes are identical, so CD-H/ACC-H
+must not move.
+* stage 7 `lam_t 150` on every moving episode; stage 8 reuses production's depth placement
+  exactly (`stage8_scale.py --pin`, via `ablate_pose_scale.py --pin_source_scale`)
+* episodes 1, 7, 12: lam 150 moved scored-frame translations p99 22.5 / 19.5 / 6.7 cm (fast
+  motion), so they keep the control's lam-50 poses; episode 7 still gets the PEN push-out
+* stage 8b PEN push-out (validated `penfix_smooth` settings) where it lowers PEN on the fit AND
+  held-out hand points and raises the episode's object self-acceleration by <= 0.015
+  (`track1/assemble_phys.py`); accepted on 6 7 8 9 10 11 15 16 17 20 25 27 28 29
+* local: PEN 0.0556 -> 0.0321 cm, accO(self) 0.104 -> 0.086, gap 4.71 -> 4.79 cm, contact 0.487 -> 0.482
+* prediction: PEN ~0.026 on Kaggle (control's Kaggle/local ratio 0.81), ACC-O lower, CD-O within ~0.1
+
 
 **1 · p1_global** — question: should the object live in the body's depth scale ("global") or in
 MoGe's ("none")? The baseline chose by the smallest hand–object gap over the whole first..last
