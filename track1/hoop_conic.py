@@ -146,6 +146,8 @@ def main() -> None:
     ap.add_argument('--sigma', type=float, default=3.0, help='temporal smoothing of the replaced poses (frames)')
     ap.add_argument('--blend', type=int, default=8, help='frames to blend into the existing pose at segment ends')
     ap.add_argument('--replace_all', action='store_true', help='use the ellipse pose wherever its fit is good')
+    ap.add_argument('--radius', type=float, default=0.0,
+                    help='ring radius prior in metres (sets object_scale; e.g. 0.35 for a 70 cm hoop)')
     ap.add_argument('--lam_t', type=float, default=0.0, help='final second-difference smoothing of translation')
     ap.add_argument('--lam_r', type=float, default=0.0, help='... of rotation (rotation vectors)')
     args = ap.parse_args()
@@ -166,9 +168,12 @@ def main() -> None:
     off = meta['frame_offset']
     states = json.loads((W / 'track/states.json').read_text())['frames']
     d = dict(np.load(args.src / f'{stem}.npz'))
-    s = float(d['object_scale'])
+    s = s_old = float(d['object_scale'])
     mesh = trimesh.load(args.src / f'{stem}_object.obj', force='mesh', process=False)
     c_m, axis_m, R_m = ring_frame(np.asarray(mesh.vertices))
+    if args.radius:                         # physical prior: rescale the object so the ring has this radius
+        d['object_scale'] = np.asarray(args.radius / R_m, dtype=d['object_scale'].dtype)
+        s = float(d['object_scale'])
     R = R_m * s
     n_rows = len(d['object_translation'])
     vid = np.arange(off, min(off + len(states), n_rows))
@@ -242,12 +247,13 @@ def main() -> None:
     # report on scored frames
     spans = json.loads((paths.DATA / 'submission/scored_spans.json').read_text())[str(args.episode)]['frames']
     sc = np.array([k for k, f in enumerate(vid) if f in set(spans)])
-    P = trimesh.sample.sample_surface(mesh, 1500, seed=0)[0] * s
+    P0 = trimesh.sample.sample_surface(mesh, 1500, seed=0)[0]
+    P = P0 * s
 
-    def hand_gap(Rs, ts):
-        return np.array([cKDTree(P @ Rs[k].T + ts[k]).query(hands[k])[0].min() * 100 for k in sc])
-    g0, g1 = hand_gap(Rold, told), hand_gap(R_out, t_out)
-    rep = {'episode': args.episode, 'ring_radius_m': R, 'replaced_frames': int(use.sum()),
+    def hand_gap(Rs, ts, scale):
+        return np.array([cKDTree(P0 * scale @ Rs[k].T + ts[k]).query(hands[k])[0].min() * 100 for k in sc])
+    g0, g1 = hand_gap(Rold, told, s_old), hand_gap(R_out, t_out, s)
+    rep = {'episode': args.episode, 'ring_radius_m': R, 'object_scale': [s_old, s], 'replaced_frames': int(use.sum()),
            'replaced_scored': int(use[sc].sum()), 'scored': len(sc),
            'hand_gap_scored_median_cm': [float(np.median(g0)), float(np.median(g1))],
            'hand_gap_scored_p90_cm': [float(np.percentile(g0, 90)), float(np.percentile(g1, 90))],
