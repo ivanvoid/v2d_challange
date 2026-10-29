@@ -28,6 +28,7 @@ the object translation per scored stretch (jitter, not the error).
 | 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | 15.85675 | **30.87113** | 0.14125 | **0.08382** | 0.01499 | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
 | 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
 | 11 | 2026-10-29 | phys_v6 | `f496c69` | phys_v4 + hand-only depenetration (H4; body pose of hands/arms only, objects identical) | 15.85531 | **30.78576** | 0.14129 | 0.08383 | **0.00908** | 0.0096 | 5.02 | 0.477 | 0.065 | 0.056 | `experiments/phys_v6/track1.parquet` |
+| 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | pending | pending | pending | pending | pending | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
