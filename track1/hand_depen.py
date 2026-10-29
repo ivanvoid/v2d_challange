@@ -10,9 +10,9 @@ Per episode, on the packed scored frames:
            sign from the scorer's winding-number inside test, distance from dense surface samples;
            sampled trilinearly (differentiable)
   losses   pen      every hand vertex outside the surface by >= --margin_mm
-           contact  frames that touched before (min hand distance < 1.5 cm) keep their closest 5 %
-                    of hand vertices within 5 mm of the surface (RHINO / IPMAN), so hands do not
-                    simply open away from the object
+           contact  frames that touched before (min hand distance < 1.5 cm): the closest 5 % of hand
+                    vertices (RHINO / IPMAN) may not move further from the surface than they were
+                    (pulling hands IN everywhere made the arms jitter: ACC-H self 0.065 -> 0.131)
            reg      parameter change^2 (stay near the fit), temp: second differences over
                     consecutive scored frames (ACC-H)
 Writes <out>/episodes (a full copy of --src with changed `pose` rows), hand_depen.json and plots.
@@ -132,11 +132,12 @@ def run_episode(e, args, mhr, dev):
         sd0, hv0 = torch.cat(sd0), torch.cat(hv0)
     touching = (sd0.min(1).values < 0.015)
     uv0 = project(hv0)
+    k = max(1, int(0.05 * len(hid)))
+    close0 = torch.topk(sd0, k, dim=1, largest=False).values.clamp(min=0.005)   # where the hand was
     delta = torch.zeros(T, len(cols), dtype=torch.float64, device=dev, requires_grad=True)
     opt = torch.optim.Adam([delta], lr=args.lr)
     trip = torch.as_tensor(consecutive_triplets(frames), device=dev)
     margin = args.margin_mm / 1000
-    k = max(1, int(0.05 * len(hid)))
     for step in range(args.steps):
         opt.zero_grad()
         for a in range(0, T, args.chunk):
@@ -148,7 +149,7 @@ def run_episode(e, args, mhr, dev):
             mv = (hv - hv0[idx]).norm(dim=-1)                                    # 3D motion of each hand vertex
             cap = torch.relu(mv - args.move_tol_cm / 100).pow(2).sum(1) * args.w_move
             close = torch.topk(sd, k, dim=1, largest=False).values
-            cont = (torch.relu(close - 0.005).pow(2).mean(1)) * touching[idx]
+            cont = (torch.relu(close - close0[idx]).pow(2).mean(1)) * touching[idx]   # never pull away, never pull in
             loss = (pen.sum() * args.w_pen + cont.sum() * args.w_contact + img.sum() + cap.sum()) / T
             loss.backward()
         reg = (reg_w * delta.pow(2)).sum(1).mean()
@@ -156,6 +157,14 @@ def run_episode(e, args, mhr, dev):
         temp = args.w_temp * acc.pow(2).sum(1).mean() if len(trip) else 0 * reg
         (reg + temp).backward()
         opt.step()
+    if args.smooth_sigma > 0:                      # the optimised corrections jitter per frame: ACC-H
+        from scipy.ndimage import gaussian_filter1d
+        dn = delta.detach().cpu().numpy()
+        breaks = np.flatnonzero(np.diff(frames) != 1) + 1
+        for part in np.split(np.arange(T), breaks):
+            if len(part) > 1:
+                dn[part] = gaussian_filter1d(dn[part], args.smooth_sigma, axis=0, mode='nearest')
+        delta = torch.as_tensor(dn, dtype=torch.float64, device=dev)
     with torch.no_grad():
         sd1, hv1 = [], []
         for a in range(0, T, args.chunk):
@@ -254,6 +263,8 @@ def main() -> None:
     ap.add_argument('--arm', action='store_true', help='also move shoulder/elbow parameters (hand translates)')
     ap.add_argument('--w_reg_arm', type=float, default=1.0)
     ap.add_argument('--w_temp', type=float, default=50.0)
+    ap.add_argument('--smooth_sigma', type=float, default=0.0,
+                    help='Gaussian-smooth the corrections over each scored stretch before applying (frames)')
     args = ap.parse_args()
     out = args.out.resolve()
     if not out.is_relative_to((paths.DATA / 'experiments').resolve()):
