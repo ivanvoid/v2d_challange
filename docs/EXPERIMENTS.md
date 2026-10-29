@@ -79,7 +79,7 @@ re-interpretation after the fact.
 * **Assumption falsified (2026-10-29, review sheet `experiments/review/first_frames.png`):
   "scored frames are hand-contact frames" (stage8_scale.py docstring) is not true at the start of
   the span.** On the first scored frame our hands are 15-62 cm from the object in most episodes,
-  and in the video the person is often still reaching (iron 7, paint roller 19, stool 21). 11
+  and in the video the person is often still reaching (iron 7, paint roller 19, stool 21). 15
   episodes start at exactly video frame 90, which looks like a fixed 3 s cut, not contact onset.
   Consequences: (1) stage 8's contact-based depth choice also scores non-contact frames, a
   plausible source of its bias; (2) Fix 2 ("bring the object to the hands on every scored frame")
