@@ -118,9 +118,18 @@ re-interpretation after the fact.
   tracker had lost the hoop or IoU < 0.3); chosen tilt passes the hand at 1.6 cm median vs 9.9 cm
   for the other; hand-object gap p90 on scored frames 24.5 -> 6.7 cm; review sheet
   `experiments/hoop_conic_ep1/episode_000001_hoop.png` (green on the real hoop, old pose on the body).
-  **Kaggle prediction (phys_v7 = phys_v6 + episode 1 only): CD-O 30.10-30.60 (episode 1 improves
+  **Kaggle prediction (phys_v7 = phys_v6 + episode 1 (variant c) + desk locks 10/11): CD-O 30.10-30.60 (episode 1 improves
   by ~6-20 cm); PEN, CD-H, ACC-H within +-0.001/+-0.02/+-0.001; ACC-O within +-0.003. FAIL if
   CD-O > 30.70.**
+  * Iterations on episode 1 (local, all with review sheets): (a) replace only lost / IoU<0.3 frames:
+    45 cm jumps where it switches to the old pose (object self-acc 0.09 -> 3.43) — rejected;
+    (b) replace every frame + lam 1000: smooth, but where the hoop is half hidden the ellipse fits
+    a partial arc and gives a thin edge-on hoop on frames the tracker had right — rejected;
+    (c) **per frame keep whichever pose explains the mask better (`--choose_by_image`) + lam 1000**:
+    lost frames fixed (hoop moves from the body to the hand), tracked frames unchanged; 140/174
+    scored frames use the ellipse pose; hand-object gap p90 24.5 -> 16.5 cm. Episode 2 with its
+    mesh radius (0.41 m = 83 cm hoop) made gaps worse (22 -> 83 cm median): depth from size
+    scales with the radius, so it is re-run with the user's 67-72 cm prior (`--radius 0.35`).
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
