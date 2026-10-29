@@ -145,9 +145,11 @@ def run_episode(e, args, mhr, dev):
             pen = torch.relu(margin - sd).pow(2).sum(1)
             px = (project(hv) - uv0[idx]).norm(dim=-1)                          # image motion of each hand vertex
             img = torch.relu(px - args.px_tol).pow(2).mean(1) * args.w_2d
+            mv = (hv - hv0[idx]).norm(dim=-1)                                    # 3D motion of each hand vertex
+            cap = torch.relu(mv - args.move_tol_cm / 100).pow(2).sum(1) * args.w_move
             close = torch.topk(sd, k, dim=1, largest=False).values
             cont = (torch.relu(close - 0.005).pow(2).mean(1)) * touching[idx]
-            loss = (pen.sum() * args.w_pen + cont.sum() * args.w_contact + img.sum()) / T
+            loss = (pen.sum() * args.w_pen + cont.sum() * args.w_contact + img.sum() + cap.sum()) / T
             loss.backward()
         reg = (reg_w * delta.pow(2)).sum(1).mean()
         acc = delta[trip - 1] - 2 * delta[trip] + delta[trip + 1]
@@ -177,6 +179,7 @@ def run_episode(e, args, mhr, dev):
     gap1 = sd1.clamp(min=0).min(1).values.cpu().numpy() * 100
     top = np.argsort(-move.mean(1).cpu().numpy())[:3]
     viz = {'frames': frames[top], 'before': hv0[top].cpu().numpy(), 'after': hv1[top].cpu().numpy(),
+           'moved': move[top].cpu().numpy(),
            'object': [((s * p['mesh_v']) @ R[i].T + t[i]) for i in top]}
     new_pose = p['pose'].copy()
     new_pose[:, col_list] += delta.detach().cpu().numpy().astype(new_pose.dtype)
@@ -216,12 +219,13 @@ def overlay(viz, stem, path) -> None:
         u, v = uv(np.r_[a, b])
         ax.set_xlim(u.min() - 60, u.max() + 60); ax.set_ylim(v.max() + 60, v.min() - 60)
         ax.set_title(f'video frame {int(f)}', fontsize=9); ax.axis('off')
-    for ax, b, a, o in zip(axes[1], viz['before'], viz['after'], viz['object']):
+    for ax, b, a, o, m in zip(axes[1], viz['before'], viz['after'], viz['object'], viz['moved']):
         ax.scatter(o[::3, 0], o[::3, 2], s=.3, c='orange', alpha=.4)
         ax.scatter(b[::4, 0], b[::4, 2], s=.3, c='red', alpha=.5)
         ax.scatter(a[::4, 0], a[::4, 2], s=.3, c='lime', alpha=.5)
-        c = np.r_[a, b].mean(0)
-        ax.set_xlim(c[0] - .25, c[0] + .25); ax.set_ylim(c[2] + .25, c[2] - .25)
+        w = m > np.percentile(m, 50)                                             # the hand that moved most
+        c = np.r_[a[w], b[w]].mean(0)
+        ax.set_xlim(c[0] - .3, c[0] + .3); ax.set_ylim(c[2] + .3, c[2] - .3)
         ax.set_xlabel('x (m)'); ax.set_ylabel('depth z (m), camera at top'); ax.set_aspect('equal')
         ax.set_title('top-down view (camera frame)', fontsize=9)
     axes[0, 0].legend(markerscale=20, fontsize=7)
@@ -242,6 +246,8 @@ def main() -> None:
     ap.add_argument('--margin_mm', type=float, default=1.0)
     ap.add_argument('--w_2d', type=float, default=0.0, help='keep hand vertices where they project (px^2)')
     ap.add_argument('--px_tol', type=float, default=3.0, help='free image motion per hand vertex (px)')
+    ap.add_argument('--move_tol_cm', type=float, default=2.0, help='free 3D motion per hand vertex (cm)')
+    ap.add_argument('--w_move', type=float, default=0.0, help='penalty on 3D hand motion beyond --move_tol_cm')
     ap.add_argument('--w_pen', type=float, default=1e4)
     ap.add_argument('--w_contact', type=float, default=1e3)
     ap.add_argument('--w_reg', type=float, default=1.0, help='finger/wrist parameter change weight')
