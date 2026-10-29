@@ -158,6 +158,14 @@ re-interpretation after the fact.
   tolerance because pen_squeeze / hand_depen run after this step in postprocess.py. Expectation
   revised: silhouettes cannot correct depth, so the gain is a small refinement, larger only where
   tracking was poor.
+* **J / H5 test-set check (2026-10-29): FAIL — silhouette refinement does not move objects toward
+  the reference.** Silhouette-only joint fit on test-set episodes 9 (bowl) and 21 (bar stool):
+  IoU 0.838 -> 0.864 and 0.786 -> 0.827, shifts <= 2.5 cm. Against the multi-view reference
+  (ep 9): CD-O 23.5 -> 23.5 cm, lateral error 12.1 -> 12.2 cm. The lateral error is not a 2D
+  misfit (H5 falsified), so the joint fit's silhouette term cannot fix it, and its hand-contact
+  term moves objects in depth (the phys_v3 failure mode). J is not submitted; joint_fit stays
+  disabled in postprocess_config.json. Remaining CD-O error is placement relative to the body
+  (depth and registration), not image fit.
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
