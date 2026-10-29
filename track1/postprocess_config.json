@@ -1,32 +1,168 @@
 {
-  "_comment": "Post-processing after run_stage.sh stages 1-8, from production out/ + submission/episodes to the packed Track 1 file. Every step reads the previous step's episodes dir and writes a full copy (experiments/<run>/<step>/episodes). Steps are applied in this order by track1/postprocess.py. Episode-specific settings come from user-confirmed physical facts (static objects, the hoop at the feet) or from per-episode gates logged in docs/EXPERIMENTS.md.",
-  "steps": [
-    {"name": "smooth_objects", "tool": "ablate_pose_scale",
-     "_why": "stage 7 lam_t 1000 (tuned on the Track 2 test set; Kaggle phys_v4) with production's stage-8 placement pinned",
-     "lam_t": 1000, "skip": [12, 24, 26]},
-    {"name": "stools_static", "tool": "stationary_stool", "episodes": [24, 26],
-     "_why": "user: stools 24 and 26 never move (Kaggle stool_static)"},
-    {"name": "desk_static", "tool": "static_lock",
-     "episodes": {"10": "", "11": ""},
-     "_why": "user: desk static in the first half of ep 10 and until the end of ep 11 (onset detected)"},
-    {"name": "hoop_ep1", "tool": "hoop_conic", "episode": 1,
-     "args": ["--choose_by_image", "--lam_t", "1000", "--lam_r", "1000"],
-     "_why": "tracker lost the held hoop; image ellipse + hand (H10)"},
-    {"name": "hoop_ep0", "tool": "object_depth_scale", "episodes": [0], "k": 1.193,
-     "_why": "hoop lies on the floor around the feet (H12; Kaggle phys_v7 CD-O -2.87)"},
-    {"name": "joint_fit", "tool": "joint_fit", "enabled": false,
-     "skip_episodes": [24, 26], "skip_frames": {"10": "80-364", "11": "0-704"},
-     "_why": "J: whole-video object refinement; per-episode gates"},
-    {"name": "smooth_body", "tool": "smooth_body", "sigma": 4,
-     "_why": "Kaggle phys_v2: ACC-H 0.174 -> 0.141, CD-H -0.12"},
-    {"name": "pen_objects", "tool": "pen_squeeze",
-     "groups": [{"episodes": [16, 15, 17], "args": ["--sigma", "6"]},
-                {"episodes": [8, 7], "args": ["--grid", "1.0", "--sigma", "6"]},
-                {"episodes": [9, 25, 6, 28, 29, 10, 22, 11, 20, 27], "args": ["--grid", "1.0", "--sigma", "6"]}],
-     "_why": "push objects off the hands (phys_v4); foam may shrink (two-hand squeeze)"},
-    {"name": "pen_hands", "tool": "hand_depen",
-     "episodes": [16, 15, 7, 9, 25, 28, 1, 10, 22, 24, 8, 17, 6, 27, 29, 5, 11, 21, 23],
-     "args": ["--arm", "--w_reg", "10", "--w_reg_arm", "2", "--w_2d", "1", "--w_move", "3e4", "--move_tol_cm", "2", "--smooth_sigma", "4"],
-     "_why": "H4: move hands, not objects (Kaggle phys_v6: PEN 0.0150 -> 0.0091 with CD-O -0.085)"}
-  ]
+ "_comment": "Post-processing after run_stage.sh stages 1-8, from production out/ + submission/episodes to the packed Track 1 file. Every step reads the previous step's episodes dir and writes a full copy (experiments/<run>/<step>/episodes). Steps are applied in this order by track1/postprocess.py. Episode-specific settings come from user-confirmed physical facts (static objects, the hoop at the feet) or from per-episode gates logged in docs/EXPERIMENTS.md.",
+ "steps": [
+  {
+   "name": "smooth_objects",
+   "tool": "ablate_pose_scale",
+   "_why": "stage 7 lam_t 1000 (tuned on the Track 2 test set; Kaggle phys_v4) with production's stage-8 placement pinned",
+   "lam_t": 1000,
+   "skip": [
+    12,
+    24,
+    26
+   ]
+  },
+  {
+   "name": "stools_static",
+   "tool": "stationary_stool",
+   "episodes": [
+    24,
+    26
+   ],
+   "_why": "user: stools 24 and 26 never move (Kaggle stool_static)"
+  },
+  {
+   "name": "desk_static",
+   "tool": "static_lock",
+   "episodes": {
+    "10": "",
+    "11": ""
+   },
+   "_why": "user: desk static in the first half of ep 10 and until the end of ep 11 (onset detected)"
+  },
+  {
+   "name": "hoop_ep1",
+   "tool": "hoop_conic",
+   "episode": 1,
+   "args": [
+    "--choose_by_image",
+    "--lam_t",
+    "1000",
+    "--lam_r",
+    "1000"
+   ],
+   "_why": "tracker lost the held hoop; image ellipse + hand (H10)"
+  },
+  {
+   "name": "hoop_floor",
+   "tool": "hoop_floor",
+   "episodes": [
+    0,
+    1,
+    2
+   ],
+   "_why": "a ring lying flat on the floor sits at the soles (H12 generalised; derives ep 0's x1.193 from 169 flat frames, leaves 1/2 unchanged)"
+  },
+  {
+   "name": "joint_fit",
+   "tool": "joint_fit",
+   "enabled": false,
+   "skip_episodes": [
+    24,
+    26
+   ],
+   "skip_frames": {
+    "10": "80-364",
+    "11": "0-704"
+   },
+   "_why": "J: whole-video object refinement; per-episode gates"
+  },
+  {
+   "name": "smooth_body",
+   "tool": "smooth_body",
+   "sigma": 4,
+   "_why": "Kaggle phys_v2: ACC-H 0.174 -> 0.141, CD-H -0.12"
+  },
+  {
+   "name": "pen_objects",
+   "tool": "pen_squeeze",
+   "groups": [
+    {
+     "episodes": [
+      16,
+      15,
+      17
+     ],
+     "args": [
+      "--sigma",
+      "6"
+     ]
+    },
+    {
+     "episodes": [
+      8,
+      7
+     ],
+     "args": [
+      "--grid",
+      "1.0",
+      "--sigma",
+      "6"
+     ]
+    },
+    {
+     "episodes": [
+      9,
+      25,
+      6,
+      28,
+      29,
+      10,
+      22,
+      11,
+      20,
+      27
+     ],
+     "args": [
+      "--grid",
+      "1.0",
+      "--sigma",
+      "6"
+     ]
+    }
+   ],
+   "_why": "push objects off the hands (phys_v4); foam may shrink (two-hand squeeze)"
+  },
+  {
+   "name": "pen_hands",
+   "tool": "hand_depen",
+   "episodes": [
+    16,
+    15,
+    7,
+    9,
+    25,
+    28,
+    1,
+    10,
+    22,
+    24,
+    8,
+    17,
+    6,
+    27,
+    29,
+    5,
+    11,
+    21,
+    23
+   ],
+   "args": [
+    "--arm",
+    "--w_reg",
+    "10",
+    "--w_reg_arm",
+    "2",
+    "--w_2d",
+    "1",
+    "--w_move",
+    "3e4",
+    "--move_tol_cm",
+    "2",
+    "--smooth_sigma",
+    "4"
+   ],
+   "_why": "H4: move hands, not objects (Kaggle phys_v6: PEN 0.0150 -> 0.0091 with CD-O -0.085)"
+  }
+ ]
 }

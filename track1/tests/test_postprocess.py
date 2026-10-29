@@ -8,7 +8,7 @@ T1 = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(T1))
 from postprocess import split  # noqa: E402
 
-TOOLS = {'ablate_pose_scale', 'stationary_stool', 'static_lock', 'hoop_conic', 'object_depth_scale',
+TOOLS = {'ablate_pose_scale', 'stationary_stool', 'static_lock', 'hoop_conic', 'object_depth_scale', 'hoop_floor',
          'joint_fit', 'smooth_body', 'pen_squeeze', 'hand_depen'}
 
 

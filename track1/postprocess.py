@@ -151,6 +151,11 @@ def main() -> None:
         elif tool == 'hoop_conic':
             run([PY, T1 / 'hoop_conic.py', '--src', cur, '--episode', st['episode'], *st['args'], '--out', D], logf, GPUS[0])
             cur = merge(cur, [(D / 'episodes', [st['episode']])], D / 'merged', logf)
+        elif tool == 'hoop_floor':
+            run([PY, T1 / 'hoop_floor.py', '--src', cur, '--episodes', *st['episodes'], '--out', D], logf, GPUS[0])
+            for r in json.loads((D / 'hoop_floor.json').read_text()):
+                log(f"   ep {r['episode']}: {r['decision']}", logf)
+            cur = D / 'episodes'
         elif tool == 'object_depth_scale':
             run([PY, T1 / 'object_depth_scale.py', '--src', cur, '--out', D, '--k', st['k'], '--episodes', *st['episodes']], logf)
             cur = D / 'episodes'
