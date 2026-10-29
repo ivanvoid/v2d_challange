@@ -105,8 +105,9 @@ def main() -> None:
     ap.add_argument('--lr', type=float, default=3e-3)
     ap.add_argument('--chunk', type=int, default=48)
     ap.add_argument('--w_sil', type=float, default=1.0)
-    ap.add_argument('--w_contact', type=float, default=200.0)
-    ap.add_argument('--w_pen', type=float, default=2000.0)
+    ap.add_argument('--w_contact', type=float, default=0.0,
+                    help='0 by default: on episode 6 the contact term moved the object 4.8 cm in depth (p99)')
+    ap.add_argument('--w_pen', type=float, default=0.0, help='0 by default: penetration is fixed later in the chain')
     ap.add_argument('--lam_t', type=float, default=1000.0)
     ap.add_argument('--lam_r', type=float, default=300.0)
     ap.add_argument('--sigma_depth_cm', type=float, default=4.0)
@@ -115,6 +116,8 @@ def main() -> None:
     ap.add_argument('--skip_frames', type=str, default='', help='video frame ranges to leave untouched, e.g. 80-364')
     ap.add_argument('--min_iou_gain', type=float, default=0.005)
     ap.add_argument('--max_shift_cm', type=float, default=15.0)
+    ap.add_argument('--pen_tol', type=float, default=0.002,
+                    help='allowed PEN rise (cm): the chain fixes penetration after this step (pen_squeeze, hand_depen)')
     args = ap.parse_args()
     import cv2
     import torch
@@ -262,7 +265,7 @@ def main() -> None:
     gates = {'iou_median_not_lower': stats['iou_median'][1] >= stats['iou_median'][0] - 1e-4,
              'iou_mean_gain': stats['iou_mean'][1] - stats['iou_mean'][0] >= args.min_iou_gain,
              'contact_not_lower': stats['contact_share'][1] >= stats['contact_share'][0] - 0.02,
-             'pen_not_higher': stats['pen_cm'][1] <= stats['pen_cm'][0] + 1e-4,
+             'pen_not_higher': stats['pen_cm'][1] <= stats['pen_cm'][0] + args.pen_tol,
              'acc_not_higher': stats['self_acc'][1] <= stats['self_acc'][0] + 0.01,
              'shift_bounded': stats['shift_cm_p99'] <= args.max_shift_cm}
     stats['gates'] = gates

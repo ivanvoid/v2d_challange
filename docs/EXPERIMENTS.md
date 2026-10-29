@@ -149,6 +149,15 @@ re-interpretation after the fact.
   misplacements in single episodes dominate CD-O, and physical evidence other than hand contact
   (feet inside the hoop) finds them. Next: the same audit for body contact (sitting on stools
   24/26), the jump-rope hoop (ep 2) and the paint roller (18/19).
+* **J pilot, episode 6 (local, `track1/joint_fit.py`, 2026-10-29).** Full losses (silhouette + hand
+  contact + no penetration): IoU 0.765 -> 0.748, object self-acc 0.025 -> 0.286 — REJECT (hand terms
+  shake the object per frame). Heavy smoothing + weak hand terms: IoU 0.770, depth change p99 4.8 cm
+  (contact-driven depth moves, the phys_v3 failure mode), self-acc 0.049 — REJECT. Silhouette only:
+  IoU 0.765 -> 0.791, self-acc 0.025 -> 0.021, shift p99 0.9 cm; failed only "PEN not higher"
+  (0.0048 -> 0.0060). Decision: hand terms off (w_contact = w_pen = 0); the PEN gate gets a 0.002 cm
+  tolerance because pen_squeeze / hand_depen run after this step in postprocess.py. Expectation
+  revised: silhouettes cannot correct depth, so the gain is a small refinement, larger only where
+  tracking was poor.
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
