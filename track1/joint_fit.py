@@ -303,9 +303,9 @@ def main() -> None:
         ov = img.copy()
         ov[b['sil'][k].numpy()] = (0.5 * ov[b['sil'][k].numpy()] + [127, 0, 0]).astype(np.uint8)
         ov[a_['sil'][k].numpy()] = (0.5 * ov[a_['sil'][k].numpy()] + [0, 127, 0]).astype(np.uint8)
-        cnt, _ = cv2.findContours(M[k].cpu().numpy().astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        cnt, _ = cv2.findContours((M[k].cpu().numpy() > .5).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         cv2.drawContours(ov, cnt, -1, (255, 255, 0), 1)
-        ys, xs = np.nonzero(M[k].cpu().numpy() | a_['sil'][k].numpy() | b['sil'][k].numpy())
+        ys, xs = np.nonzero((M[k].cpu().numpy() > .5) | a_["sil"][k].numpy() | b["sil"][k].numpy())
         ax.imshow(ov)
         if len(xs):
             ax.set_xlim(max(0, xs.min() - 40), min(Wd, xs.max() + 40)); ax.set_ylim(min(H, ys.max() + 40), max(0, ys.min() - 40))
