@@ -114,6 +114,18 @@ def min_rotation(a, b):
     return Rotation.from_rotvec(v / np.linalg.norm(v) * np.arctan2(np.linalg.norm(v), c)).as_matrix()
 
 
+def smooth_second_difference(x: np.ndarray, lam: float) -> np.ndarray:
+    """argmin sum |x - raw|^2 + lam sum |x[i-1] - 2 x[i] + x[i+1]|^2, per column (sparse solve)."""
+    import scipy.sparse as sp
+    from scipy.sparse.linalg import spsolve
+    n = len(x)
+    if n < 3:
+        return x.copy()
+    D = sp.diags([np.ones(n - 2), -2 * np.ones(n - 2), np.ones(n - 2)], [0, 1, 2], shape=(n - 2, n))
+    A = (sp.eye(n) + lam * (D.T @ D)).tocsc()
+    return np.stack([spsolve(A, x[:, k]) for k in range(x.shape[1])], 1)
+
+
 def ring_frame(mesh_v):
     """Ring centre, axis (smallest principal direction) and median radius in mesh units."""
     c = mesh_v.mean(0)
@@ -133,6 +145,9 @@ def main() -> None:
     ap.add_argument('--hand_max_cm', type=float, default=15.0)
     ap.add_argument('--sigma', type=float, default=3.0, help='temporal smoothing of the replaced poses (frames)')
     ap.add_argument('--blend', type=int, default=8, help='frames to blend into the existing pose at segment ends')
+    ap.add_argument('--replace_all', action='store_true', help='use the ellipse pose wherever its fit is good')
+    ap.add_argument('--lam_t', type=float, default=0.0, help='final second-difference smoothing of translation')
+    ap.add_argument('--lam_r', type=float, default=0.0, help='... of rotation (rotation vectors)')
     args = ap.parse_args()
     import cv2
     import torch
@@ -182,7 +197,8 @@ def main() -> None:
             if prev_n is not None and n @ prev_n < 0:
                 n = -n
             rec.update(fit=fit, res_px=rp, hand_cm=dist[pick], hand_cm_other=dist[1 - pick], c=c.tolist(), n=n.tolist())
-            rec['use'] = bool((st['state'] == 'lost' or st['iou'] < args.iou_bad) and fit >= args.fit_min and rp < 8)
+            poor = st['state'] == 'lost' or st['iou'] < args.iou_bad
+            rec['use'] = bool((poor or args.replace_all) and fit >= args.fit_min and rp < 8)
             prev_n = n if rec['use'] or prev_n is None else prev_n
         rows.append(rec)
     use = np.array([r['use'] for r in rows])
@@ -209,6 +225,11 @@ def main() -> None:
     t_out = ramp[:, None] * tnew + (1 - ramp[:, None]) * told
     R_out = np.stack([(Rotation.from_matrix(Rold[k]) * Rotation.from_rotvec(ramp[k] * (Rotation.from_matrix(Rold[k]).inv()
                        * Rotation.from_matrix(Rnew[k])).as_rotvec())).as_matrix() for k in range(len(vid))])
+    if args.lam_t > 0:                     # one acceleration-penalised solve over the clip (as stage 7)
+        t_out = smooth_second_difference(t_out, args.lam_t)
+        ref = Rotation.from_matrix(R_out[len(R_out) // 2])
+        rv = (ref.inv() * Rotation.from_matrix(R_out)).as_rotvec()
+        R_out = (ref * Rotation.from_rotvec(smooth_second_difference(rv, args.lam_r))).as_matrix()
     dest = out / 'episodes'
     dest.mkdir(parents=True, exist_ok=True)
     for f in args.src.glob('episode_*'):

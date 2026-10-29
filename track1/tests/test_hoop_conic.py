@@ -8,7 +8,7 @@ import numpy as np
 T1 = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(T1))
 from hoop_conic import (circle_candidates, circle_points, min_rotation, project,  # noqa: E402
-                        rim_distance, ring_frame)
+                        rim_distance, ring_frame, smooth_second_difference)
 
 K = {'fx': 950., 'fy': 950., 'cx': 768., 'cy': 576.}
 
@@ -40,6 +40,13 @@ class HoopConic(unittest.TestCase):
         a, b = np.array([1., 0, 0]), np.array([0, 1., 0])
         np.testing.assert_allclose(min_rotation(a, b) @ a, b, atol=1e-12)
         np.testing.assert_allclose(min_rotation(a, -a) @ a, -a, atol=1e-12)
+
+    def test_second_difference_smoother_removes_a_step_and_keeps_a_line(self):
+        x = np.c_[np.linspace(0, 1, 50), np.zeros(50)]
+        np.testing.assert_allclose(smooth_second_difference(x, 1000), x, atol=1e-9)   # lines are free
+        step = np.zeros((60, 1)); step[30:] = .4
+        y = smooth_second_difference(step, 1000)
+        self.assertLess(np.abs(np.diff(y[:, 0], 2)).max(), .01)
 
     def test_ring_frame_of_a_torus(self):
         import trimesh
