@@ -68,6 +68,14 @@ re-interpretation after the fact.
     block (`experiments/hand_pilot/plots/episode_000016_hands.png`). w_reg 10: same PEN, mean move
     0.69 cm, parameter change p99 0.25 rad (chosen). With arm parameters free: mean move 5.2 cm,
     contact 0.61 -> 0.50 — rejected (moving the arm swings the whole hand).
+  * Visual review (user, 2026-10-29): the finger-only fix flips fingers out of the object — the
+    "before" hands match the video better. Variant with arm + a 2D anchor (hand vertices keep their
+    image position): realistic in the image, but the top-down view showed the solver hiding a hand
+    26 cm deeper behind the desk (ep 9); mean hand move 0.8-2.5 cm > the 1 cm gate. Final variant:
+    arm + 2D anchor + 3D motion cap 2 cm (`--arm --w_reg 10 --w_reg_arm 2 --w_2d 1 --w_move 3e4
+    --move_tol_cm 2`): foam 16 PEN 0.129 -> 0.036, desk 9 0.030 -> 0.009, p99 hand move < 2.8 cm,
+    hands keep their shape (`experiments/hand_pilot_cap/plots/`). Penetration deeper than ~2 cm
+    is left in place on purpose: it is a hand/object placement error, not a pose error.
 * **R1 (RHINO contact detector vs scored frames) — NOT TESTABLE on Track 1, dropped before running.**
   Our packed outputs cover the scored span; frames between scored stretches are also contact
   frames (invalid reference, hand still touching), so only the 10 margin frames per side would be
