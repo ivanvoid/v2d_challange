@@ -111,6 +111,10 @@ def run_episode(e, args, mhr, dev):
     Rt = torch.as_tensor(R, dtype=torch.float64, device=dev)
     tt = torch.as_tensor(t, dtype=torch.float64, device=dev)
     T = len(frames)
+    Kd = json.loads((paths.OUT / stem / 'intrinsics_stable.json').read_text())
+
+    def project(x):                                                              # [..., 3] -> pixels
+        return torch.stack([Kd['fx'] * x[..., 0] / x[..., 2] + Kd['cx'], Kd['fy'] * x[..., 1] / x[..., 2] + Kd['cy']], -1)
 
     def hand_sdf(delta, idx):
         pose = pose0[idx].clone()
@@ -127,6 +131,7 @@ def run_episode(e, args, mhr, dev):
             sd0.append(d_); hv0.append(h_)
         sd0, hv0 = torch.cat(sd0), torch.cat(hv0)
     touching = (sd0.min(1).values < 0.015)
+    uv0 = project(hv0)
     delta = torch.zeros(T, len(cols), dtype=torch.float64, device=dev, requires_grad=True)
     opt = torch.optim.Adam([delta], lr=args.lr)
     trip = torch.as_tensor(consecutive_triplets(frames), device=dev)
@@ -136,11 +141,13 @@ def run_episode(e, args, mhr, dev):
         opt.zero_grad()
         for a in range(0, T, args.chunk):
             idx = torch.arange(a, min(T, a + args.chunk), device=dev)
-            sd, _ = hand_sdf(delta, idx)
+            sd, hv = hand_sdf(delta, idx)
             pen = torch.relu(margin - sd).pow(2).sum(1)
+            px = (project(hv) - uv0[idx]).norm(dim=-1)                          # image motion of each hand vertex
+            img = torch.relu(px - args.px_tol).pow(2).mean(1) * args.w_2d
             close = torch.topk(sd, k, dim=1, largest=False).values
             cont = (torch.relu(close - 0.005).pow(2).mean(1)) * touching[idx]
-            loss = (pen.sum() * args.w_pen + cont.sum() * args.w_contact) / T
+            loss = (pen.sum() * args.w_pen + cont.sum() * args.w_contact + img.sum()) / T
             loss.backward()
         reg = (reg_w * delta.pow(2)).sum(1).mean()
         acc = delta[trip - 1] - 2 * delta[trip] + delta[trip + 1]
@@ -155,6 +162,7 @@ def run_episode(e, args, mhr, dev):
             sd1.append(d_); hv1.append(h_)
         sd1, hv1 = torch.cat(sd1), torch.cat(hv1)
     move = (hv1 - hv0).norm(dim=-1)                                              # [T, H] metres
+    px_move = (project(hv1) - uv0).norm(dim=-1)                                  # [T, H] pixels
     # exact scorer-style PEN on a fixed 512-vertex subset (as eval_local.py), before / after
     sub = np.random.default_rng(0).choice(len(hid), size=min(512, len(hid)), replace=False)
 
@@ -178,6 +186,7 @@ def run_episode(e, args, mhr, dev):
             'stats': {'pen_before_cm': pen0, 'pen_after_cm': pen1,
                       'hand_move_mean_cm': float(move.mean() * 100), 'hand_move_p99_cm': float(torch.quantile(move.flatten()[::7], .99) * 100),
                       'touching_frames': int(touching.sum()), 'frames': int(T),
+                      'image_move_mean_px': float(px_move.mean()), 'image_move_p99_px': float(torch.quantile(px_move.flatten()[::7], .99)),
                       'contact_before': float((gap0 < 2).mean()), 'contact_after': float((gap1 < 2).mean()),
                       'param_change_max_rad': float(dd.max()),
                       'finger_wrist_change_p99_rad': float(np.percentile(dd[:, ~is_arm], 99)),
@@ -194,7 +203,7 @@ def overlay(viz, stem, path) -> None:
     W = paths.OUT / stem
     K = json.loads((W / 'intrinsics_stable.json').read_text())
     off = json.loads((W / 'track1_meta.json').read_text())['frame_offset']
-    fig, axes = plt.subplots(1, len(viz['frames']), figsize=(5 * len(viz['frames']), 5), squeeze=False)
+    fig, axes = plt.subplots(2, len(viz['frames']), figsize=(5 * len(viz['frames']), 10), squeeze=False)
 
     def uv(x):
         return K['fx'] * x[:, 0] / x[:, 2] + K['cx'], K['fy'] * x[:, 1] / x[:, 2] + K['cy']
@@ -207,6 +216,14 @@ def overlay(viz, stem, path) -> None:
         u, v = uv(np.r_[a, b])
         ax.set_xlim(u.min() - 60, u.max() + 60); ax.set_ylim(v.max() + 60, v.min() - 60)
         ax.set_title(f'video frame {int(f)}', fontsize=9); ax.axis('off')
+    for ax, b, a, o in zip(axes[1], viz['before'], viz['after'], viz['object']):
+        ax.scatter(o[::3, 0], o[::3, 2], s=.3, c='orange', alpha=.4)
+        ax.scatter(b[::4, 0], b[::4, 2], s=.3, c='red', alpha=.5)
+        ax.scatter(a[::4, 0], a[::4, 2], s=.3, c='lime', alpha=.5)
+        c = np.r_[a, b].mean(0)
+        ax.set_xlim(c[0] - .25, c[0] + .25); ax.set_ylim(c[2] + .25, c[2] - .25)
+        ax.set_xlabel('x (m)'); ax.set_ylabel('depth z (m), camera at top'); ax.set_aspect('equal')
+        ax.set_title('top-down view (camera frame)', fontsize=9)
     axes[0, 0].legend(markerscale=20, fontsize=7)
     fig.suptitle(f'{stem}: hands before (red) / after (green), object (orange)', fontsize=10)
     fig.tight_layout(); fig.savefig(path, dpi=90); plt.close(fig)
@@ -223,6 +240,8 @@ def main() -> None:
     ap.add_argument('--chunk', type=int, default=96)
     ap.add_argument('--res', type=int, default=72)
     ap.add_argument('--margin_mm', type=float, default=1.0)
+    ap.add_argument('--w_2d', type=float, default=0.0, help='keep hand vertices where they project (px^2)')
+    ap.add_argument('--px_tol', type=float, default=3.0, help='free image motion per hand vertex (px)')
     ap.add_argument('--w_pen', type=float, default=1e4)
     ap.add_argument('--w_contact', type=float, default=1e3)
     ap.add_argument('--w_reg', type=float, default=1.0, help='finger/wrist parameter change weight')
@@ -269,7 +288,7 @@ def main() -> None:
         overlay(r['viz'], stem, out / 'plots' / f'{stem}_hands.png')
         print(f"{stem}: PEN {st['pen_before_cm']:.4f} -> {st['pen_after_cm']:.4f} cm | hand move mean "
               f"{st['hand_move_mean_cm']:.2f} p99 {st['hand_move_p99_cm']:.2f} cm | contact {st['contact_before']:.2f} -> "
-              f"{st['contact_after']:.2f} | p99 change finger/wrist {st['finger_wrist_change_p99_rad']:.2f} arm "
+              f"{st['contact_after']:.2f} | image move mean {st['image_move_mean_px']:.1f} p99 {st['image_move_p99_px']:.1f} px | p99 change finger/wrist {st['finger_wrist_change_p99_rad']:.2f} arm "
               f"{st['arm_change_p99_rad']:.2f} rad", flush=True)
     (out / 'hand_depen.json').write_text(json.dumps({'src': str(args.src), 'params': {k: (str(v) if isinstance(v, Path) else v)
                                                       for k, v in vars(args).items()}, 'episodes': report}, indent=1) + '\n')
