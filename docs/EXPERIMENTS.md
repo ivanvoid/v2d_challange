@@ -109,6 +109,18 @@ re-interpretation after the fact.
   changed only hands and moved CD-O by -0.085. Test: replace ONLY episode 1's first-scored-frame
   body (user: the only bad first frame) by a better estimate; prediction: CD-H and CD-O both
   improve, by >= 0.05 each (>= 1.5 cm on that episode). FAIL if either changes by < 0.02.
+  * Episode 1 inspected (`experiments/review/ep1/first_frames_zoom.png`): the BODY at the first
+    scored frame is fine; the HOOP is wrong (on the body; the real hoop hangs from the extended
+    hand ~60 cm to the left). H9 as stated does not apply to episode 1.
+* **H10 — hoop pose from the image ellipse (`track1/hoop_conic.py`).** A circle of known radius
+  seen by a calibrated camera is fixed by its image ellipse up to a two-fold tilt; the hand that
+  holds the rim picks the tilt. Local on episode 1: 189 frames replaced (72/174 scored, where the
+  tracker had lost the hoop or IoU < 0.3); chosen tilt passes the hand at 1.6 cm median vs 9.9 cm
+  for the other; hand-object gap p90 on scored frames 24.5 -> 6.7 cm; review sheet
+  `experiments/hoop_conic_ep1/episode_000001_hoop.png` (green on the real hoop, old pose on the body).
+  **Kaggle prediction (phys_v7 = phys_v6 + episode 1 only): CD-O 30.10-30.60 (episode 1 improves
+  by ~6-20 cm); PEN, CD-H, ACC-H within +-0.001/+-0.02/+-0.001; ACC-O within +-0.003. FAIL if
+  CD-O > 30.70.**
 * **R1 (RHINO contact detector vs scored frames) — NOT TESTABLE on Track 1, dropped before running.**
   Our packed outputs cover the scored span; frames between scored stretches are also contact
   frames (invalid reference, hand still touching), so only the 10 margin frames per side would be
