@@ -121,6 +121,12 @@ re-interpretation after the fact.
   **Kaggle prediction (phys_v7 = phys_v6 + episode 1 only): CD-O 30.10-30.60 (episode 1 improves
   by ~6-20 cm); PEN, CD-H, ACC-H within +-0.001/+-0.02/+-0.001; ACC-O within +-0.003. FAIL if
   CD-O > 30.70.**
+* **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
+  and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
+  sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
+  Locked: ep 10 video 80-364 (held-out IoU 0.764 -> 0.770, shift <= 2.7 cm), ep 11 0-704
+  (0.852 -> 0.865, <= 6.0 cm). Kaggle prediction (alone): ACC-O -0.0001..-0.0008 (these episodes are
+  already smooth at lam 1000), CD-O -0.05..+0.02. FAIL if ACC-O rises or CD-O rises > 0.05.
 * **R1 (RHINO contact detector vs scored frames) — NOT TESTABLE on Track 1, dropped before running.**
   Our packed outputs cover the scored span; frames between scored stretches are also contact
   frames (invalid reference, hand still touching), so only the 10 margin frames per side would be
