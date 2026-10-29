@@ -43,6 +43,22 @@ re-interpretation after the fact.
   visible, MoGe's object-surface depth (median over our object mask), expressed in our body's
   frame, is within 5 cm of the reference surface depth over the same pixels (median |error| per
   episode). FAIL if > 10 cm: then a better depth model would help.
+  * **Result 2026-10-29: INCONCLUSIVE — and the test set cannot settle placement at all.** Best factor
+    under the first-frame emulation: per episode 0.98 / 1.08 / 0.97 / 1.04 / 1.04 (mean 1.02); under
+    the trajectory alignment 1.03-1.05. The emulation aligns on the root pose of one frame (no
+    reference body surface exists) and is far noisier than the scorer's whole-body alignment: CD-O
+    35-135 cm per episode vs Kaggle's 31 cm mean. The fixed convention between our body frame and
+    the reference root also varies 4-14 deg per frame. Conclusion: neither alignment reproduces
+    the scorer, so test-set object-placement results stay banned; smoothing results (validated
+    twice on Kaggle) remain usable. Plot: v2d_t2eval/diag/h1_depth_factor.png (`track1/t2_diag.py`).
+* **H-depth result 2026-10-29: FAIL as stated, but confounded.** MoGe object-surface depth over our
+  mask vs the reference, in our body frame: median |error| 24.1 cm (signed -21.2: closer). Our
+  final placement (contact-chosen k): 10.7 cm (signed -8.3). Two caveats: (1) "our body frame"
+  carries the registration scale 0.957, i.e. ~4.5 % (about -15 cm at 3.3 m) of the MoGe error is
+  the known body-vs-MoGe scale disagreement, not MoGe; (2) errors drift over time within an
+  episode (desk ep 10: 0 -> -40 cm), which no per-episode constant can fix. So per-frame depth
+  consistency between body and object matters more than the depth model; our contact placement
+  already removes about half of MoGe's error. Plot: v2d_t2eval/diag/hdepth_per_frame.png.
 * **H4 — PEN is a hand-pose problem.** Adjusting only MHR wrist/finger parameters (objects =
   phys_v4) reaches local PEN < 0.005 with mean hand-point movement < 1 cm, contact not lower than
   phys_v4 - 0.01. Kaggle: PEN <= 0.005, CD-O 30.87 +- 0.05, CD-H <= 15.87, ACC-H <= 0.1445.
