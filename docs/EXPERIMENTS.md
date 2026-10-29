@@ -26,6 +26,7 @@ the object translation per scored stretch (jitter, not the error).
 | 7 | 2026-10-28 | phys_v2 | `35fa94d` | phys_v1 + body smoothing sigma 4 (smooth_body.py) + PEN squeeze (push-out <= 5 cm, foam 15/16 scale x0.92) | **15.85675** | 31.04884 | **0.14125** | 0.10539 | **0.01246** | 0.0135 | 4.92 | 0.479 | 0.065 | 0.089 | `experiments/phys_v2/track1.parquet` |
 | 8 | 2026-10-28 | phys_v3 | `23468f3` | phys_v2 + object lam_t 1000 + object depth x1.04 (not 7 8 15-17) + PEN squeeze redo; tuned on the Track 2 local test set | 15.85675 | **37.06158** | 0.14125 | **0.08468** | 0.01517 | 0.0191 | 6.87 | 0.459 | 0.065 | 0.058 | `experiments/phys_v3/track1.parquet` |
 | 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | 15.85675 | **30.87113** | 0.14125 | **0.08382** | 0.01499 | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
+| 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
 
 ## Notes per experiment
 
