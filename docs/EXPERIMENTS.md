@@ -68,6 +68,10 @@ re-interpretation after the fact.
     block (`experiments/hand_pilot/plots/episode_000016_hands.png`). w_reg 10: same PEN, mean move
     0.69 cm, parameter change p99 0.25 rad (chosen). With arm parameters free: mean move 5.2 cm,
     contact 0.61 -> 0.50 — rejected (moving the arm swings the whole hand).
+* **R1 (RHINO contact detector vs scored frames) — NOT TESTABLE on Track 1, dropped before running.**
+  Our packed outputs cover the scored span; frames between scored stretches are also contact
+  frames (invalid reference, hand still touching), so only the 10 margin frames per side would be
+  negatives. An F1 on that would be meaningless.
 * **J — joint whole-video object fit (5-episode pilot: 3, 6, 9, 18, 19).** Fitting object R, t, scale
   per episode to SAM2 masks + MoGe depth + hand contact on contact frames + no penetration +
   smoothness lowers Kaggle CD-O by >= 0.6 (<= 30.27) with the other 25 episodes byte-identical.
