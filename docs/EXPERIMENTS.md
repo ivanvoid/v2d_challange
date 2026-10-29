@@ -130,6 +130,17 @@ re-interpretation after the fact.
     scored frames use the ellipse pose; hand-object gap p90 24.5 -> 16.5 cm. Episode 2 with its
     mesh radius (0.41 m = 83 cm hoop) made gaps worse (22 -> 83 cm median): depth from size
     scales with the radius, so it is re-run with the user's 67-72 cm prior (`--radius 0.35`).
+* **H12 — episode 0's hoop belongs at the feet.** Episode 0 is "hula_hoop_inside_ground": on the scored
+  frames the hoop lies on the floor and the person stands in it (overlay
+  `experiments/hoop_conic_ep0/episode_000000_hoop.png`). Our hoop is 22-29 cm above the foot soles and
+  50-70 cm in front of the body; stage 8 chose its depth (k 0.925) from HAND contact on frames where
+  the contact is with the FEET. Moving the hoop along the camera rays by x1.193 (per-frame estimates
+  1.172-1.198, p10-p90) puts its lowest point at the soles; foot points inside the ring 0 % -> 56 %
+  (top-down `experiments/review/ep0_hoop_feet_topdown.png`: person stands inside the hoop as in the
+  video). The ellipse refit (H10) is NOT used for episode 0 (old and new agree there).
+* **phys_v7 = phys_v6 + H10 (ep 1) + H11 (desk 10/11) + H12 (ep 0 x1.193). Pre-registered Kaggle
+  prediction: CD-O 29.0-30.5 (ep 0 -0.5..-1.3, ep 1 -0.2..-0.6, desks ~0); ACC-O 0.0830-0.0845;
+  PEN 0.0085-0.0100; CD-H 15.84-15.87; ACC-H 0.1405-0.1420. FAIL if CD-O > 30.70.**
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
