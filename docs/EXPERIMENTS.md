@@ -29,6 +29,7 @@ the object translation per scored stretch (jitter, not the error).
 | 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
 | 11 | 2026-10-29 | phys_v6 | `f496c69` | phys_v4 + hand-only depenetration (H4; body pose of hands/arms only, objects identical) | 15.85531 | **30.78576** | 0.14129 | 0.08383 | **0.00908** | 0.0096 | 5.02 | 0.477 | 0.065 | 0.056 | `experiments/phys_v6/track1.parquet` |
 | 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | 15.85531 | **27.91838** | 0.14129 | 0.08385 | 0.00921 | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
+| 13 | 2026-10-29 | rebuild_v7 | `7e36459` | phys_v7 rebuilt by ONE script (track1/postprocess.py) from production outputs; same steps, reproducible order | pending | pending | pending | pending | pending | 0.0095 | 5.75 | 0.475 | 0.065 | 0.057 | `experiments/rebuild_v7/track1_commit.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
@@ -166,6 +167,10 @@ re-interpretation after the fact.
   term moves objects in depth (the phys_v3 failure mode). J is not submitted; joint_fit stays
   disabled in postprocess_config.json. Remaining CD-O error is placement relative to the body
   (depth and registration), not image fit.
+* **H13 — the single post-processing script reproduces phys_v7 (rebuild_v7).** Local proxies match
+  (PEN 0.0095 vs 0.0097, contact 0.475 vs 0.474, self-acc identical to 3 decimals). Kaggle
+  prediction: CD-O 27.85-27.99, ACC-O 0.0835-0.0842, PEN 0.0088-0.0098, CD-H 15.84-15.87,
+  ACC-H 0.1408-0.1418. FAIL if any metric leaves its range.
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
