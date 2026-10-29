@@ -146,6 +146,9 @@ def main() -> None:
     ap.add_argument('--sigma', type=float, default=3.0, help='temporal smoothing of the replaced poses (frames)')
     ap.add_argument('--blend', type=int, default=8, help='frames to blend into the existing pose at segment ends')
     ap.add_argument('--replace_all', action='store_true', help='use the ellipse pose wherever its fit is good')
+    ap.add_argument('--choose_by_image', action='store_true',
+                    help='replace a frame only if the ellipse pose explains the mask better than the existing pose')
+    ap.add_argument('--better_px', type=float, default=2.0)
     ap.add_argument('--radius', type=float, default=0.0,
                     help='ring radius prior in metres (sets object_scale; e.g. 0.35 for a 70 cm hoop)')
     ap.add_argument('--lam_t', type=float, default=0.0, help='final second-difference smoothing of translation')
@@ -203,7 +206,15 @@ def main() -> None:
                 n = -n
             rec.update(fit=fit, res_px=rp, hand_cm=dist[pick], hand_cm_other=dist[1 - pick], c=c.tolist(), n=n.tolist())
             poor = st['state'] == 'lost' or st['iou'] < args.iou_bad
-            rec['use'] = bool((poor or args.replace_all) and fit >= args.fit_min and rp < 8)
+            # image evidence for the EXISTING pose: its rim projected against the same ellipse
+            Ro, to = d['object_rotation'][f].astype(float), d['object_translation'][f].astype(float)
+            uv_old = project(circle_points(Ro @ (s_old * c_m) + to, Ro @ axis_m, R_m * s_old), K)
+            tgt = ellipse_points(ell)
+            old_res = float(np.sqrt(np.mean(np.r_[cKDTree(tgt).query(uv_old)[0], cKDTree(uv_old).query(tgt)[0]] ** 2)))
+            rec['old_res_px'] = old_res
+            better = rp + args.better_px < old_res
+            wanted = better if args.choose_by_image else (poor or args.replace_all)
+            rec['use'] = bool(wanted and fit >= args.fit_min and rp < 8)
             prev_n = n if rec['use'] or prev_n is None else prev_n
         rows.append(rec)
     use = np.array([r['use'] for r in rows])
