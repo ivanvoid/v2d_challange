@@ -28,7 +28,7 @@ the object translation per scored stretch (jitter, not the error).
 | 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | 15.85675 | **30.87113** | 0.14125 | **0.08382** | 0.01499 | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
 | 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
 | 11 | 2026-10-29 | phys_v6 | `f496c69` | phys_v4 + hand-only depenetration (H4; body pose of hands/arms only, objects identical) | 15.85531 | **30.78576** | 0.14129 | 0.08383 | **0.00908** | 0.0096 | 5.02 | 0.477 | 0.065 | 0.056 | `experiments/phys_v6/track1.parquet` |
-| 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | pending | pending | pending | pending | pending | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
+| 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | 15.85531 | **27.91838** | 0.14129 | 0.08385 | 0.00921 | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
@@ -142,6 +142,13 @@ re-interpretation after the fact.
 * **phys_v7 = phys_v6 + H10 (ep 1) + H11 (desk 10/11) + H12 (ep 0 x1.193). Pre-registered Kaggle
   prediction: CD-O 29.0-30.5 (ep 0 -0.5..-1.3, ep 1 -0.2..-0.6, desks ~0); ACC-O 0.0830-0.0845;
   PEN 0.0085-0.0100; CD-H 15.84-15.87; ACC-H 0.1405-0.1420. FAIL if CD-O > 30.70.**
+* **phys_v7 Kaggle (user-reported 2026-10-29): CD-O 30.78576 -> 27.91838 (-2.87), below the predicted
+  29.0-30.5 (good direction); ACC-O 0.08385, PEN 0.00921, CD-H 15.85531, ACC-H 0.14129 in range.**
+  CD-O is a mean over 30 episodes, so ~86 cm of one episode's CD-O disappeared — almost surely
+  episode 0's hoop moving from 50-70 cm in front of the person to the feet. Lesson: gross
+  misplacements in single episodes dominate CD-O, and physical evidence other than hand contact
+  (feet inside the hoop) finds them. Next: the same audit for body contact (sitting on stools
+  24/26), the jump-rope hoop (ep 2) and the paint roller (18/19).
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
