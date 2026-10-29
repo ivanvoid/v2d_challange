@@ -27,6 +27,7 @@ the object translation per scored stretch (jitter, not the error).
 | 8 | 2026-10-28 | phys_v3 | `23468f3` | phys_v2 + object lam_t 1000 + object depth x1.04 (not 7 8 15-17) + PEN squeeze redo; tuned on the Track 2 local test set | 15.85675 | **37.06158** | 0.14125 | **0.08468** | 0.01517 | 0.0191 | 6.87 | 0.459 | 0.065 | 0.058 | `experiments/phys_v3/track1.parquet` |
 | 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | 15.85675 | **30.87113** | 0.14125 | **0.08382** | 0.01499 | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
 | 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
+| 11 | 2026-10-29 | phys_v6 | `f496c69` | phys_v4 + hand-only depenetration (H4; body pose of hands/arms only, objects identical) | pending | pending | pending | pending | pending | 0.0096 | 5.02 | 0.477 | 0.065 | 0.056 | `experiments/phys_v6/track1.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
@@ -84,6 +85,17 @@ re-interpretation after the fact.
   Consequences: (1) stage 8's contact-based depth choice also scores non-contact frames, a
   plausible source of its bias; (2) Fix 2 ("bring the object to the hands on every scored frame")
   would be wrong on approach frames and needs a contact detector before use.
+  * Two more fixes before shipping (gates caught them): (1) arm/hand corrections jittered per
+    frame — 22-joint self-acceleration 0.065 -> 0.131; fixed by Gaussian-smoothing the corrections
+    (sigma 4). (2) The contact term pulled hands IN on every touching frame (moved arms where there
+    was no penetration); now it only forbids moving away.
+  * **H4 local result: PARTIAL.** Gates on hand motion (0.16-0.53 cm mean), contact (unchanged),
+    body jitter (0.0652 -> 0.0654), objects (identical) PASS. Local PEN 0.0179 -> 0.0096: the
+    pre-registered < 0.005 is NOT reached — the realism constraints (2D anchor, 2 cm cap,
+    smoothing) leave deep penetrations (foam 15/16 ~0.06) in place. Kaggle prediction for phys_v6
+    (pre-registered): PEN 0.0080-0.0095, CD-O 30.84-30.90, ACC-O 0.0835-0.0841, CD-H 15.84-15.88,
+    ACC-H 0.1405-0.1420. If PEN lands in range with CD-O at phys_v4's level, phys_v6 dominates
+    phys_v5 (same PEN, CD-O -0.11).
 * **R1 (RHINO contact detector vs scored frames) — NOT TESTABLE on Track 1, dropped before running.**
   Our packed outputs cover the scored span; frames between scored stretches are also contact
   frames (invalid reference, hand still touching), so only the 10 margin frames per side would be
