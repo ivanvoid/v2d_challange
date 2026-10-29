@@ -28,6 +28,30 @@ the object translation per scored stretch (jitter, not the error).
 | 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | 15.85675 | **30.87113** | 0.14125 | **0.08382** | 0.01499 | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
 | 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
 
+## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
+
+Control: phys_v4 (Kaggle CD-H 15.85675, CD-O 30.87113, ACC-H 0.14125, ACC-O 0.08382, PEN 0.01499).
+Each result is recorded under its hypothesis as PASS / FAIL against the numbers below; no
+re-interpretation after the fact.
+
+* **H1 — test-set alignment.** The test set's "objects 4 % too close" came from aligning by the
+  pelvis path over time, which the scorer does not do. Test: redo the depth-factor sweep with a
+  scorer-like alignment (rigid, once, on the first scored frame, from the root pose). Prediction:
+  best factor 1.00 +- 0.01. FAIL if the best factor stays >= 1.03 (then Track 1 / Track 2 differ
+  and test-set placement results stay banned).
+* **H-depth — the depth model is not the bottleneck.** On test-set frames where the object is
+  visible, MoGe's object-surface depth (median over our object mask), expressed in our body's
+  frame, is within 5 cm of the reference surface depth over the same pixels (median |error| per
+  episode). FAIL if > 10 cm: then a better depth model would help.
+* **H4 — PEN is a hand-pose problem.** Adjusting only MHR wrist/finger parameters (objects =
+  phys_v4) reaches local PEN < 0.005 with mean hand-point movement < 1 cm, contact not lower than
+  phys_v4 - 0.01. Kaggle: PEN <= 0.005, CD-O 30.87 +- 0.05, CD-H <= 15.87, ACC-H <= 0.1445.
+  FAIL if PEN > 0.006 or CD-O > 30.95.
+* **J — joint whole-video object fit (5-episode pilot: 3, 6, 9, 18, 19).** Fitting object R, t, scale
+  per episode to SAM2 masks + MoGe depth + hand contact on contact frames + no penetration +
+  smoothness lowers Kaggle CD-O by >= 0.6 (<= 30.27) with the other 25 episodes byte-identical.
+  FAIL if CD-O drops < 0.2 or rises.
+
 ## Notes per experiment
 
 **9 · phys_v4 (Kaggle, user-reported 2026-10-28): CD-H 15.85675, CD-O 30.87113 (best so far; phys_v2
