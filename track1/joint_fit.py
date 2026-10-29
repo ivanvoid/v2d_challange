@@ -167,7 +167,10 @@ def main() -> None:
         sim = mesh.simplify_quadric_decimation(face_count=6000)
         mv, mf = np.asarray(sim.vertices, np.float64), np.asarray(sim.faces, np.int32)
     c_m = mv.mean(0)
-    sdf = SdfGrid(np.asarray(mesh.vertices), np.asarray(mesh.faces), res=64).torch(dev)
+    from pen_fast import PenetrationMesh
+    pm = PenetrationMesh(np.asarray(mesh.vertices), np.asarray(mesh.faces))
+    sdf = SdfGrid(np.asarray(mesh.vertices), np.asarray(mesh.faces), res=64,
+                  inside_fn=lambda q: np.abs(pm.winding(q)) > 0.5).torch(dev)   # scorer's inside test
     verts = torch.as_tensor((mv - c_m) * s, dtype=torch.float32, device=dev)  # centred, scaled
     faces = torch.as_tensor(mf, device=dev)
     R0 = torch.as_tensor(d['object_rotation'][vid], dtype=torch.float32, device=dev)
