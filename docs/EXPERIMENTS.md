@@ -63,6 +63,11 @@ re-interpretation after the fact.
   phys_v4) reaches local PEN < 0.005 with mean hand-point movement < 1 cm, contact not lower than
   phys_v4 - 0.01. Kaggle: PEN <= 0.005, CD-O 30.87 +- 0.05, CD-H <= 15.87, ACC-H <= 0.1445.
   FAIL if PEN > 0.006 or CD-O > 30.95.
+  * Pilot on foam ep 16 (`track1/hand_depen.py`, local, 2026-10-29): fingers+wrist, w_reg 1: PEN
+    0.1289 -> 0.0010, hand move mean 0.92 cm, but the overlay showed fingers flipped upward out of the
+    block (`experiments/hand_pilot/plots/episode_000016_hands.png`). w_reg 10: same PEN, mean move
+    0.69 cm, parameter change p99 0.25 rad (chosen). With arm parameters free: mean move 5.2 cm,
+    contact 0.61 -> 0.50 — rejected (moving the arm swings the whole hand).
 * **J — joint whole-video object fit (5-episode pilot: 3, 6, 9, 18, 19).** Fitting object R, t, scale
   per episode to SAM2 masks + MoGe depth + hand contact on contact frames + no penetration +
   smoothness lowers Kaggle CD-O by >= 0.6 (<= 30.27) with the other 25 episodes byte-identical.
