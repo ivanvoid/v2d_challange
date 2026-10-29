@@ -76,6 +76,14 @@ re-interpretation after the fact.
     --move_tol_cm 2`): foam 16 PEN 0.129 -> 0.036, desk 9 0.030 -> 0.009, p99 hand move < 2.8 cm,
     hands keep their shape (`experiments/hand_pilot_cap/plots/`). Penetration deeper than ~2 cm
     is left in place on purpose: it is a hand/object placement error, not a pose error.
+* **Assumption falsified (2026-10-29, review sheet `experiments/review/first_frames.png`):
+  "scored frames are hand-contact frames" (stage8_scale.py docstring) is not true at the start of
+  the span.** On the first scored frame our hands are 15-62 cm from the object in most episodes,
+  and in the video the person is often still reaching (iron 7, paint roller 19, stool 21). 11
+  episodes start at exactly video frame 90, which looks like a fixed 3 s cut, not contact onset.
+  Consequences: (1) stage 8's contact-based depth choice also scores non-contact frames, a
+  plausible source of its bias; (2) Fix 2 ("bring the object to the hands on every scored frame")
+  would be wrong on approach frames and needs a contact detector before use.
 * **R1 (RHINO contact detector vs scored frames) — NOT TESTABLE on Track 1, dropped before running.**
   Our packed outputs cover the scored span; frames between scored stretches are also contact
   frames (invalid reference, hand still touching), so only the 10 margin frames per side would be
