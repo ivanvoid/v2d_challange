@@ -207,9 +207,9 @@ def main() -> None:
     sd_, sl_, sr_ = args.sigma_depth_cm / 100, args.sigma_lat_cm / 100, np.radians(args.sigma_rot_deg)
     for step in range(args.steps):
         opt.zero_grad()
-        dr_m, dt_m = drot * keep_t, dtr * keep_t                     # skipped frames stay exactly as they are
         for a in range(0, T, args.chunk):
             idx = torch.arange(a, min(T, a + args.chunk), device=dev)
+            dr_m, dt_m = drot * keep_t, dtr * keep_t                 # skipped frames stay exactly as they are
             X, Rf, cen = posed(dr_m, dt_m, idx)
             sil = render(X)
             l_sil = (((sil - M[idx]) ** 2) * Vv[idx]).mean((1, 2)).sum() * args.w_sil * 100
