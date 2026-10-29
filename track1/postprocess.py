@@ -38,14 +38,14 @@ def log(msg: str, logf: Path) -> None:
         fh.write(line + '\n')
 
 
-def run(cmd: list, logf: Path, gpu: str | None = None) -> None:
+def run(cmd: list, logf: Path, gpu: str | None = None, cwd: Path = T1) -> None:
     env = {**os.environ, 'V2D_DATA': str(paths.DATA)}
     if gpu is not None:
         env['CUDA_VISIBLE_DEVICES'] = gpu
     with open(logf, 'a') as fh:
         fh.write('$ ' + ' '.join(map(str, cmd)) + '\n')
         fh.flush()
-        r = subprocess.run(list(map(str, cmd)), env=env, cwd=T1, stdout=fh, stderr=subprocess.STDOUT)
+        r = subprocess.run(list(map(str, cmd)), env=env, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT)
     if r.returncode:
         raise SystemExit(f'step failed ({r.returncode}): {" ".join(map(str, cmd))} — see {logf}')
 
@@ -205,7 +205,7 @@ def main() -> None:
     run([PY, T1 / 'eval_local.py', 'proxies', '--out', ev], logf, GPUS[0])
     run([PY_SUB, '-c', 'import sys,json;from pathlib import Path;sys.path.insert(0,"submit");import v2d_submit as v;'
          f'r=v.validate_submission(Path("{final}"),"track_1",json.load(open("config/tracks.json")));print("kit validate OK",len(r))'],
-        logf)
+        logf, cwd=paths.KIT)
     (R / 'final_episodes.txt').write_text(str(cur) + '\n')
     log(f'done: {final} (episodes {cur})', logf)
 
