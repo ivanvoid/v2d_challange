@@ -42,6 +42,12 @@ class StageContracts(unittest.TestCase):
         kept = block.split('KEPT ANYWAY', 1)[1]
         self.assertIn('$STAMPS write --episode "$V" --stage 5e', kept.split('fi', 1)[0])
 
+    def test_stage6_without_a_good_anchor_keeps_the_best_one(self):
+        src = (T1 / 'stage6_track.py').read_text(encoding='utf-8')
+        self.assertIn('STRICT_6', src)
+        self.assertIn('register_anchor(a, min_iou=0.0)', src)
+        self.assertLess(src.index('KEPT the best one anyway'), src.index('raise SystemExit(f"{ep}: no usable anchor")'))
+
     def test_beta_eval_defaults_to_current_production_not_old_baseline(self):
         beta = (T1.parent / 'run_beta.sh').read_text(encoding='utf-8')
         self.assertIn('BETA_BASELINE:-$BASEPATH/logs/eval/beta/prodnow', beta)

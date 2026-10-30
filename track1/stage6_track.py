@@ -245,7 +245,7 @@ def main() -> None:
     log(f"{ep}: {len(anchor_frames)} anchor candidates (windows of {args.anchor_every} frames, select by "
         f"{args.anchor_select}" + (f"; no anchor in windows starting at video frames {skipped}" if skipped else "")
         + ")")
-    def register_anchor(a, why="anchor"):
+    def register_anchor(a, why="anchor", min_iou=0.4):
         """Register from scratch on frame a; distinct orientations within --hyp_margin of the best fit."""
         rgb, depth, mask = load(a)
         with to_debug(args.debug_log, f"register {why} {a}"):
@@ -261,7 +261,7 @@ def main() -> None:
         best = max(s_["fit"] for s_ in sc)
         keep = sorted([i for i in range(len(distinct)) if sc[i]["fit"] >= best - args.hyp_margin],
                       key=lambda i: -sc[i]["fit"])[:args.max_hyps]
-        if sc[keep[0]]["iou"] < 0.4:
+        if sc[keep[0]]["iou"] < min_iou:
             log(f"  {why} video frame {a + off}: best IoU {sc[keep[0]]['iou']:.2f} too low, dropped")
             return None
         fits_txt = ", ".join("%.2f" % sc[i]["fit"] for i in keep)
@@ -275,6 +275,15 @@ def main() -> None:
         r = register_anchor(a)
         if r is not None:
             anchors.append(r)
+    if not anchors and not os.environ.get("STRICT_6"):
+        # Every episode must reach the submission: a rough track beats a missing episode (fresh full run
+        # 2026-10-30, hoop ep 1 with a poorly regenerated mesh). Take the best-fitting candidate anyway.
+        cands = [r for r in (register_anchor(a, min_iou=0.0) for a in sorted(anchor_frames)) if r is not None]
+        if cands:
+            best = max(cands, key=lambda r: r["hyps"][0]["iou"])
+            anchors = [best]
+            log(f"{ep}: WARN no anchor reached IoU 0.4 — KEPT the best one anyway (video frame "
+                f"{best['frame'] + off}, IoU {best['hyps'][0]['iou']:.2f}); STRICT_6=1 to stop here")
     if not anchors:
         raise SystemExit(f"{ep}: no usable anchor")
     log(f"{ep}: {len(anchors)} anchors at video frames {[a['frame'] + off for a in anchors]} "
