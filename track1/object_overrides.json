@@ -1,5 +1,11 @@
 {
  "_comment": "Reviewed per-object decisions that replace an automatic choice. Read only by stage5_object.py (not by stages 3-5, so editing it does not invalidate their stamps).",
- "iron": {"force_candidate": "6:cand_000643",
-          "_why": "5e outline score picked the handle-less blob (ep 7 frame 597, 0.899) over the clean iron (ep 6 frame 723, 0.871); colour agreement equal (0.127 vs 0.127)"}
+ "iron": {
+  "force_candidate": "6:cand_000643",
+  "_why": "5e outline score picked the handle-less blob (ep 7 frame 597, 0.899) over the clean iron (ep 6 frame 723, 0.871); colour agreement equal (0.127 vs 0.127)"
+ },
+ "hula_hoop": {
+  "force_candidate": "0:cand_000220",
+  "_why": "5e's choice is not stable between runs: the fresh full run of 2026-10-30 picked cand_000613 (ep 0 video frame 693), which lies in the late floor interval where SAM2 fills the hoop's hole (user-confirmed mask defect), and that mesh then failed validation on eps 1/2 (IoU 0.13) and stage-6 registration (IoU 0.15). Production's cand_000220 (frame 300, clean ring mask) gave Kaggle CD-O 27.92 with phys_v7."
+ }
 }
