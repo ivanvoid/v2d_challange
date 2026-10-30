@@ -30,6 +30,7 @@ the object translation per scored stretch (jitter, not the error).
 | 11 | 2026-10-29 | phys_v6 | `f496c69` | phys_v4 + hand-only depenetration (H4; body pose of hands/arms only, objects identical) | 15.85531 | **30.78576** | 0.14129 | 0.08383 | **0.00908** | 0.0096 | 5.02 | 0.477 | 0.065 | 0.056 | `experiments/phys_v6/track1.parquet` |
 | 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | 15.85531 | **27.91838** | 0.14129 | 0.08385 | 0.00921 | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
 | 13 | 2026-10-29 | rebuild_v7 | `7e36459` | phys_v7 rebuilt by ONE script (track1/postprocess.py) from production outputs; same steps, reproducible order | pending | pending | pending | pending | pending | 0.0095 | 5.75 | 0.475 | 0.065 | 0.057 | `experiments/rebuild_v7/track1_commit.parquet` |
+| 14 | 2026-10-30 | full_v2 | `af639e8` | START-TO-FINISH: committed code on all 30 videos in a fresh root (stages 1-8 + postprocess.py); 4 end-to-end bugs fixed on the way | pending | pending | pending | pending | pending | 0.0101 | 5.66 | 0.486 | 0.065 | 0.052 | `experiments/full_v2/track1.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
@@ -171,6 +172,11 @@ re-interpretation after the fact.
   (PEN 0.0095 vs 0.0097, contact 0.475 vs 0.474, self-acc identical to 3 decimals). Kaggle
   prediction: CD-O 27.85-27.99, ACC-O 0.0835-0.0842, PEN 0.0088-0.0098, CD-H 15.84-15.87,
   ACC-H 0.1408-0.1418. FAIL if any metric leaves its range.
+* **H14 — the committed code reproduces the result from scratch (full_v2).** Fresh run of all stages on all
+  30 videos; local proxies vs phys_v7: PEN 0.0097 -> 0.0101, gap 5.80 -> 5.66 cm, contact 0.474 -> 0.486,
+  object self-acc 0.0565 -> 0.0515. Models are stochastic, so wider ranges than H13. Kaggle prediction:
+  CD-O 27.3-28.9, ACC-O 0.080-0.087, PEN 0.0085-0.0105, CD-H 15.70-16.05, ACC-H 0.139-0.144.
+  FAIL if CD-O > 29.5 (the end-to-end code would not reproduce our best result).
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
@@ -608,3 +614,46 @@ IoU<0.4. Scored median IoU 0.3545→0.3890, but lost share 32.8%→33.9%
 and translation-step p99 13.84→19.04 cm. Gate failed; there is **no**
 supported new hoop Parquet to submit from these overnight experiments.
 See `docs/STAGE_AUDIT_2026-10-27.md` for the full diagnosis.
+
+## Open4DHOI / InterPoint challenge-clip pilot (2026-10-30, local only)
+
+Requested method: **Efficient and Scalable Monocular Human-Object Interaction Motion Reconstruction**,
+using the local `prev_research/open4dhoi_code` checkout at
+`f33948fcefca16b12545ca062027cbefded8e579`.
+
+**Status: 2/2 short joint-optimization sessions completed and output-validated. No accuracy gain established.**
+Experiment directory: `experiments/open4dhoi_challenge_pilot/`; open its `index.html` for the
+source / SMPL-X warm start / Open4DHOI comparison videos and global-view renders. Full provenance,
+limitations and native loss samples are in `README.md` and `report.json` there.
+
+- Two real challenge clips: episode 3 (bowl), input video frames 206–301, and episode 6 (iron),
+  frames 346–441; first 32 frames of each are the bounded joint-optimization pilot.
+- This is a **warm-start refinement experiment, not a full end-to-end paper reproduction**:
+  reuse production undistorted RGB, masks, calibration, meshes and MHR initialization. The GVHMR
+  weight download failed with a TLS reset at the public Hugging Face CDN.
+- MHR is explicitly converted to SMPL-X using Meta's public barycentric topology map and vertex
+  fitting, not passed off as SMPL-X parameters. Mean mapped surface-fit errors: 18.80 mm / 17.24 mm.
+- The full released InterPoint/LLaVA checkpoint is strictly loaded (no missing/unexpected keys,
+  no lightweight/dummy VLM). At threshold 0.5 it predicts contacts on all 32 pilot frames in both
+  clips. Forward/backward-checked optical flow supplies additional model-seeded 2D correspondences.
+- Run the upstream least-squares + joint body/hand/object Adam solver on physical GPU 2 only.
+  Runtime, source copy and outputs are isolated inside the experiment. No production predictions,
+  existing environments or original research-checkout files are changed.
+- Outputs are SMPL-X, not Track 1 MHR submission arrays. No Kaggle submission or reference-based
+  accuracy score is part of this pilot; contact/fit changes are only local diagnostics.
+
+Each session outputs 32 frames (episode 3: source 206–237; episode 6: source 346–377). The upstream
+protocol solves least squares on all 32, runs 30 Adam steps on 12 anchors at stride 3 plus the
+last frame, and interpolates the rest. Optimization plus global rendering took 2m23s / 2m14s on
+GPU 2, excluding one-time setup, initialization conversion, contact prediction and comparison renders.
+
+| Episode | Mean body surface change vs initialization | Mean object surface change vs initialization | Mean native mask term, logged step 0 → 25 |
+|---|---:|---:|---:|
+| 3 (bowl) | 0.146 cm | 33.26 cm | 0.9094 → 0.9414 |
+| 6 (iron) | 0.206 cm | 37.13 cm | 0.8377 → 0.8777 |
+
+**Preliminary verdict: functional, but do not promote this pilot into production.** The native
+objective decreased mainly through collision-loss reduction; contact fit was approximately flat
+and mask loss increased. Large object changes are not evidence of more accurate placement. This
+uses automatic, unreviewed contacts and easy clips selected by production tracking IoU; it does
+not establish the paper's end-to-end accuracy. Production NPZ and mesh hashes remained unchanged.
