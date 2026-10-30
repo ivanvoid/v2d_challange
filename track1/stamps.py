@@ -76,7 +76,7 @@ STAGES = {
               extra=[T1 / "object_priors.json"], deps=["1", "2", "4"], inputs=[], outputs=["mesh"]),
     "5c": dict(code=["stage5_check.py"], extra=[], deps=["4", "5"], inputs=[], outputs=["mesh/choice.json"]),
     # 5e is the only writer of the final mesh (out/<ep>/mesh_scaled.obj + material)
-    "5e": dict(code=["stage5_object.py", "stage5_validate.py", "viz.py"], extra=[], deps=["5c"],
+    "5e": dict(code=["stage5_object.py", "stage5_validate.py", "viz.py"], extra=[T1 / "object_overrides.json"], deps=["5c"],
                inputs=["OBJECT_VIDEOS"],
                outputs=["mesh_scaled.obj", "material.mtl", "material_0.png", "mesh/object_choice.json",
                         "mesh/validate.json"]),

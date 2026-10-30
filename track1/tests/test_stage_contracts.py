@@ -48,6 +48,12 @@ class StageContracts(unittest.TestCase):
         self.assertIn('register_anchor(a, min_iou=0.0)', src)
         self.assertLess(src.index('KEPT the best one anyway'), src.index('raise SystemExit(f"{ep}: no usable anchor")'))
 
+    def test_stage5e_reruns_when_a_mesh_override_changes(self):
+        """stage5_object.py reads object_overrides.json; a changed override must invalidate the 5e stamp
+        (2026-10-30: the hoop override was silently ignored as 'up to date')."""
+        import stamps
+        self.assertIn(T1 / 'object_overrides.json', stamps.STAGES['5e']['extra'])
+
     def test_beta_eval_defaults_to_current_production_not_old_baseline(self):
         beta = (T1.parent / 'run_beta.sh').read_text(encoding='utf-8')
         self.assertIn('BETA_BASELINE:-$BASEPATH/logs/eval/beta/prodnow', beta)
