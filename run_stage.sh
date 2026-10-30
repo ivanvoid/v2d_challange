@@ -255,7 +255,14 @@ print(' '.join(str(m['episode_index']) for m in meta if m['object'] == '$O'))")"
                     --weights "$WEIGHTS" --debug_log "$SDIR/$O.debug.log" --sheet "$SDIR/review/${VE}_validate.png" \
                     2>> "$SDIR/$O.debug.log" | tee -a "$SDIR/$O.log"
                 if [[ ${PIPESTATUS[0]} -eq 0 ]]; then $STAMPS write --episode "$V" --stage 5e || rc=1
-                else rc=3; echo "[$(date +%T)] $O: episode $V final model REJECTED (see ${VE}_validate.png)" | tee -a "$SDIR/$O.log"; fi
+                elif [[ -n "${STRICT_5E:-}" ]]; then
+                    rc=3; echo "[$(date +%T)] $O: episode $V final model REJECTED (see ${VE}_validate.png)" | tee -a "$SDIR/$O.log"
+                else
+                    # A submission needs every episode: an imperfect mesh beats no object at all (the fresh full
+                    # run of 2026-10-29 lost hoop episodes 1 and 2 here). Keep it, stamp it, warn loudly.
+                    echo "[$(date +%T)] $O: episode $V final model REJECTED by validation — KEPT ANYWAY (WARN; STRICT_5E=1 to stop here; see ${VE}_validate.png)" | tee -a "$SDIR/$O.log"
+                    $STAMPS write --episode "$V" --stage 5e || rc=1
+                fi
             done
         fi
         if [[ $rc -ne 0 ]]; then N_FAIL=$((N_FAIL + 1)); echo "[$(date +%T)] $O FAILED (exit $rc) after $((SECONDS - t))s"

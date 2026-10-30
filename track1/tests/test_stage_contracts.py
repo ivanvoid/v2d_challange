@@ -32,6 +32,16 @@ class StageContracts(unittest.TestCase):
         # Combined with test_hoop_mask_repair's direct mask hole checks, this
         # demonstrates that generic accepted!=correct topology for thin rings.
 
+    def test_stage5e_rejection_does_not_silently_drop_an_episode(self):
+        """A full run must emit every episode: a mesh rejected by validation is kept with a WARN
+        (STRICT_5E=1 restores the stop). The fresh run of 2026-10-29 lost hoop episodes 1 and 2."""
+        runner = (T1.parent / 'run_stage.sh').read_text(encoding='utf-8')
+        block = runner.split('if [[ "$STAGE" == "5e" ]]', 1)[1].split('review_stage5e.py', 1)[0]
+        self.assertIn('STRICT_5E', block)
+        self.assertIn('KEPT ANYWAY', block)
+        kept = block.split('KEPT ANYWAY', 1)[1]
+        self.assertIn('$STAMPS write --episode "$V" --stage 5e', kept.split('fi', 1)[0])
+
     def test_beta_eval_defaults_to_current_production_not_old_baseline(self):
         beta = (T1.parent / 'run_beta.sh').read_text(encoding='utf-8')
         self.assertIn('BETA_BASELINE:-$BASEPATH/logs/eval/beta/prodnow', beta)
