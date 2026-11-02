@@ -26,11 +26,11 @@ the object translation per scored stretch (jitter, not the error).
 | 7 | 2026-10-28 | phys_v2 | `35fa94d` | phys_v1 + body smoothing sigma 4 (smooth_body.py) + PEN squeeze (push-out <= 5 cm, foam 15/16 scale x0.92) | **15.85675** | 31.04884 | **0.14125** | 0.10539 | **0.01246** | 0.0135 | 4.92 | 0.479 | 0.065 | 0.089 | `experiments/phys_v2/track1.parquet` |
 | 8 | 2026-10-28 | phys_v3 | `23468f3` | phys_v2 + object lam_t 1000 + object depth x1.04 (not 7 8 15-17) + PEN squeeze redo; tuned on the Track 2 local test set | 15.85675 | **37.06158** | 0.14125 | **0.08468** | 0.01517 | 0.0191 | 6.87 | 0.459 | 0.065 | 0.058 | `experiments/phys_v3/track1.parquet` |
 | 9 | 2026-10-28 | phys_v4 | `da54a17` | phys_v3 without the depth x1.04 (lam 1000 + PEN squeeze at production placement) | 15.85675 | **30.87113** | 0.14125 | **0.08382** | 0.01499 | 0.0179 | 4.97 | 0.477 | 0.065 | 0.056 | `experiments/phys_v4/track1.parquet` |
-| 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | pending | pending | pending | pending | pending | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
+| 10 | 2026-10-29 | phys_v5 | `af4895c` | phys_v4 + second PEN push-out pass (cap 7 cm) on 11 episodes | 15.85675 | 30.98170 | 0.14125 | 0.08453 | **0.00826** | 0.0089 | 5.03 | 0.474 | 0.065 | 0.057 | `experiments/phys_v5/track1.parquet` |
 | 11 | 2026-10-29 | phys_v6 | `f496c69` | phys_v4 + hand-only depenetration (H4; body pose of hands/arms only, objects identical) | 15.85531 | **30.78576** | 0.14129 | 0.08383 | **0.00908** | 0.0096 | 5.02 | 0.477 | 0.065 | 0.056 | `experiments/phys_v6/track1.parquet` |
 | 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | 15.85531 | **27.91838** | 0.14129 | 0.08385 | 0.00921 | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
 | 13 | 2026-10-29 | rebuild_v7 | `7e36459` | phys_v7 rebuilt by ONE script (track1/postprocess.py) from production outputs; same steps, reproducible order | pending | pending | pending | pending | pending | 0.0095 | 5.75 | 0.475 | 0.065 | 0.057 | `experiments/rebuild_v7/track1_commit.parquet` |
-| 14 | 2026-10-30 | full_v2 | `af639e8` | START-TO-FINISH: committed code on all 30 videos in a fresh root (stages 1-8 + postprocess.py); 4 end-to-end bugs fixed on the way | pending | pending | pending | pending | pending | 0.0101 | 5.66 | 0.486 | 0.065 | 0.052 | `experiments/full_v2/track1.parquet` |
+| 14 | 2026-10-30 | full_v2 | `af639e8` | START-TO-FINISH: committed code on all 30 videos in a fresh root (stages 1-8 + postprocess.py); 4 end-to-end bugs fixed on the way | 15.87878 | **27.75448** | **0.14109** | **0.08147** | **0.00826** | 0.0101 | 5.66 | 0.486 | 0.065 | 0.052 | `experiments/full_v2/track1.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
@@ -177,6 +177,9 @@ re-interpretation after the fact.
   object self-acc 0.0565 -> 0.0515. Models are stochastic, so wider ranges than H13. Kaggle prediction:
   CD-O 27.3-28.9, ACC-O 0.080-0.087, PEN 0.0085-0.0105, CD-H 15.70-16.05, ACC-H 0.139-0.144.
   FAIL if CD-O > 29.5 (the end-to-end code would not reproduce our best result).
+* **H14 result (Kaggle, user-reported 2026-11-01): PASS — CD-H 15.87878, CD-O 27.75448, ACC-H 0.14109,
+  ACC-O 0.08147, PEN 0.00826, all inside the pre-registered ranges.** The fresh run (resumed after four
+  repairs) reproduces and slightly improves phys_v7 on four metrics (CD-H +0.023).
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
