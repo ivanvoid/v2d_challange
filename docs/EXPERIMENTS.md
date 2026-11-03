@@ -31,6 +31,7 @@ the object translation per scored stretch (jitter, not the error).
 | 12 | 2026-10-29 | phys_v7 | `363831d` | phys_v6 + ep0 hoop at the feet (x1.193) + ep1 hoop from image ellipse + desk locks 10/11 | 15.85531 | **27.91838** | 0.14129 | 0.08385 | 0.00921 | 0.0097 | 5.80 | 0.474 | 0.065 | 0.057 | `experiments/phys_v7/track1.parquet` |
 | 13 | 2026-10-29 | rebuild_v7 | `7e36459` | phys_v7 rebuilt by ONE script (track1/postprocess.py) from production outputs; same steps, reproducible order | pending | pending | pending | pending | pending | 0.0095 | 5.75 | 0.475 | 0.065 | 0.057 | `experiments/rebuild_v7/track1_commit.parquet` |
 | 14 | 2026-10-30 | full_v2 | `af639e8` | START-TO-FINISH: committed code on all 30 videos in a fresh root (stages 1-8 + postprocess.py); 4 end-to-end bugs fixed on the way | 15.87878 | **27.75448** | **0.14109** | **0.08147** | **0.00826** | 0.0101 | 5.66 | 0.486 | 0.065 | 0.052 | `experiments/full_v2/track1.parquet` |
+| 15 | 2026-11-03 | motion_fix | `1b52d91` | full_v2 + track1/motion_fix.py (object pose only): ep 7 lost-track iron follows the hands (356-519); symmetry-switch tumbles repaired (15, 16, 17, 20, 21; mask-IoU + grip gated); hidden spin removed on hoop/bowl/foam roll | 15.87878 | **25.17356** | 0.14109 | 0.08147 | 0.00833 | 0.0102 | 5.66 | 0.488 | 0.065 | 0.052 | `experiments/motion_fix/track1.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
@@ -180,6 +181,12 @@ re-interpretation after the fact.
 * **H14 result (Kaggle, user-reported 2026-11-01): PASS — CD-H 15.87878, CD-O 27.75448, ACC-H 0.14109,
   ACC-O 0.08147, PEN 0.00826, all inside the pre-registered ranges.** The fresh run (resumed after four
   repairs) reproduces and slightly improves phys_v7 on four metrics (CD-H +0.023).
+* **motion_fix (not pre-registered; local expectation written in experiments/motion_fix/manifest.json
+  before upload: spin removal score-neutral by construction, ep 7 CD-O down, ACC-O may rise slightly).**
+  Kaggle, user-reported 2026-11-03: CD-O 27.75448 -> **25.17356** (-2.58), PEN 0.00826 -> 0.00833,
+  CD-H / ACC-H / ACC-O unchanged. Without ground truth the gain cannot be split by episode; the only
+  large geometric change is the ep 7 iron (164 frames moved up to ~1.8 m to the hands), so it is most
+  likely the source. Only object rotation (14 episodes) and ep 7 translation rows differ from full_v2.
 * **H11 — the desk is static where the user says so (`track1/static_lock.py`).** User: ep 10 first half
   and ep 11 static. The raw tracker agrees until video frame ~375 (ep 10) and ~715 (ep 11; the
   sequence is "white_desk_lower_to_ground", so the late motion is probably real — asked the user).
