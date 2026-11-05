@@ -37,6 +37,7 @@ the object translation per scored stretch (jitter, not the error).
 | 18 | 2026-11-04 | body4_obj3000 | `19c2ede` | body4 + smooth_object_translation.py lam 3000 | 15.90523 | 24.83692 | 0.14095 | **0.07256** | 0.01048 | 0.0137 | 5.73 | 0.490 | 0.054 | 0.031 | `experiments/unified/files/track1_body4_obj3000.parquet` |
 | 19 | 2026-11-04 | obj3000 | `19c2ede` | direction_fix + smooth_object_translation.py lam 3000 (body unchanged) | 15.87878 | 24.90200 | 0.14109 | **0.07256** | 0.00980 | – | – | – | – | – | `experiments/unified/files/track1_obj3000.parquet` |
 | 20 | 2026-11-04 | obj20000 | `19c2ede` | direction_fix + smooth_object_translation.py lam 20000 (body unchanged); best rank sum (185 vs 200) | 15.87878 | **24.87842** | 0.14109 | **0.07194** | 0.01195 | – | – | – | – | – | `experiments/unified/files/track1_obj20000.parquet` |
+| 21 | 2026-11-04 | obj20000_handsB | `ff7c3e9` | obj20000 + hand_depen.py fingers/wrists only (no arm, soft cap 3 cm, margin 2 mm, 300 steps); objects identical. **FINAL** (rank sum 196 of 59 teams at the freeze) | 15.88119 | 24.89001 | 0.14109 | **0.07194** | **0.00464** | 0.0046 | 6.18 | 0.482 | 0.065 | 0.019 | `experiments/unified/files/track1_obj20000_handsB.parquet` |
 
 ## Pre-registered hypotheses (written 2026-10-29, BEFORE running the tests)
 
